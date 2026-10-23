@@ -267,11 +267,14 @@ impl Hub {
     fn edit(&mut self, conn: u64, author: u32, seq: u64, base: Vec<(Part, u64)>, states: Vec<State>) {
         let base: HashMap<Part, u64> = base.into_iter().collect();
         let now = |p: &Part| self.parts.get(p).map(|v| v.0).unwrap_or(0);
-        let mut stale: Vec<Part> = states.iter().filter(|s| base.get(&s.part) != Some(&now(&s.part))).map(|s| s.part).collect();
-        stale.sort();
-        stale.dedup();
-        if !stale.is_empty() {
-            let states = stale.iter().map(|&part| State { part, version: now(&part), data: self.parts.get(&part).and_then(|p| p.1.clone()) }).collect();
+        let stale = states.iter().any(|s| base.get(&s.part) != Some(&now(&s.part)));
+        if stale {
+            // (every part the edit changed, as it is now: the sender puts back all of them, the
+            // ones that were not stale too, since none of the edit was taken)
+            let mut parts: Vec<Part> = states.iter().map(|s| s.part).collect();
+            parts.sort();
+            parts.dedup();
+            let states = parts.iter().map(|&part| State { part, version: now(&part), data: self.parts.get(&part).and_then(|p| p.1.clone()) }).collect();
             self.send(conn, &Msg::Rejected { seq, states });
             return;
         }

@@ -94,7 +94,8 @@ pub enum Msg {
     Refused(Refusal),
     /// An edit taken: the parts with their new versions (`seq`: the author's, for the author).
     Applied { author: u32, seq: Option<u64>, states: Vec<State> },
-    /// An edit turned down: the parts it was made on as they are now.
+    /// An edit turned down (one of its parts changed meanwhile): each part it changed, as it
+    /// is now.
     Rejected { seq: u64, states: Vec<State> },
     Peers(Vec<Peer>),
     Seen { peer: u32, presence: Presence },

@@ -80,8 +80,10 @@ fn an_edit_is_taken_whole_or_not_at_all() {
     let m = Msg::Edit { seq: 2, base: vec![(Part::Tile(1, 0), 0), (Part::Tile(0, 0), 99)], states: vec![State { part: Part::Tile(1, 0), version: 0, data: Some(b"new".to_vec()) }, State { part: Part::Tile(0, 0), version: 0, data: Some(b"x".to_vec()) }] };
     a.send(m);
     let Msg::Rejected { seq: 2, states } = next(&a) else { panic!() };
-    assert_eq!(states.len(), 1);
-    assert_eq!(states[0].part, Part::Tile(0, 0));
+    // (both parts as they are: the stale one, and the new one as never there)
+    assert_eq!(states.len(), 2);
+    assert_eq!((states[0].part, states[0].data.as_deref()), (Part::Tile(0, 0), Some(&b"tile 0 0"[..])));
+    assert_eq!((states[1].part, states[1].version, states[1].data.is_none()), (Part::Tile(1, 0), 0, true));
     // the new tile was not added: a peer joining now does not get it
     let (_, w) = join(&h, "Bruno", "").unwrap();
     assert!(w.states.iter().all(|s| s.part != Part::Tile(1, 0)));
