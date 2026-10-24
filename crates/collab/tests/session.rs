@@ -256,3 +256,31 @@ fn a_peer_that_does_not_read_is_let_go() {
         assert!(Instant::now() < until, "the slow peer was never let go");
     }
 }
+
+#[test]
+fn a_flood_of_presence_never_closes_the_connection_and_the_latest_one_arrives() {
+    let h = host("", 8);
+    let (a, _) = join(&h, "Ana", "").unwrap();
+    let (b, _) = join(&h, "Bruno", "").unwrap();
+    // (far more than the send queue holds, as fast as it goes)
+    for i in 0..20_000 {
+        a.send_presence(Presence { cursor: Some([i as f64, 0.0, 0.0]), ..Default::default() });
+    }
+    // an edit still gets through after it
+    a.send(edit(1, Part::Tile(0, 0), 1, b"after the flood"));
+    let until = Instant::now() + Duration::from_secs(5);
+    let (mut last, mut applied) = (None, false);
+    while !(applied && last == Some(19_999.0)) {
+        for e in b.poll() {
+            match e {
+                Event::Msg(Msg::Seen { presence, .. }) => last = presence.cursor.map(|c| c[0]),
+                Event::Msg(Msg::Applied { .. }) => applied = true,
+                Event::Msg(_) => {}
+                Event::Closed(why) => panic!("closed: {why}"),
+            }
+        }
+        assert!(Instant::now() < until, "last presence {last:?}, edit came: {applied}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(a.poll().iter().all(|e| !matches!(e, Event::Closed(_))));
+}

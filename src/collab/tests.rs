@@ -350,3 +350,79 @@ fn hosting_without_a_password_only_when_chosen_and_never_on_the_internet() {
     c.host(&mut ed);
     assert!(c.live().is_some(), "{:?}", c.error);
 }
+
+#[test]
+fn an_edit_held_open_keeps_reading_and_puts_the_others_work_in_once_it_is_closed() {
+    let content = std::env::temp_dir().join(format!("openmapper-collab-held-{}", std::process::id()));
+    let roots = crate::install::Roots { omsi: content.clone(), content: content.clone() };
+    let mut ana_ed = crate::editor::Editor::default();
+    let mut doc = flat_map(2);
+    doc.dir = content.join("maps").join("Held");
+    ana_ed.open(doc);
+    let mut ana = super::Collab { name: "Ana".into(), port: 0, password: "long enough".into(), lan: false, ..Default::default() };
+    ana.host(&mut ana_ed);
+    let port = ana.live().unwrap().hosting.as_ref().map(|h| h._host.addr().port()).unwrap();
+    let mut bruno_ed = crate::editor::Editor::default();
+    let mut bruno = super::Collab { name: "Bruno".into(), address: format!("127.0.0.1:{port}"), password: "long enough".into(), ..Default::default() };
+    bruno.join();
+    let until = Instant::now() + Duration::from_secs(10);
+    let doc = loop {
+        bruno.tick(&mut bruno_ed, Some(&roots));
+        if let Some(d) = bruno.take_joined() {
+            break d;
+        }
+        assert!(Instant::now() < until, "never joined: {:?}", bruno.error);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    bruno_ed.open(doc);
+    bruno.joined_open(&mut bruno_ed);
+
+    // Ana's brush stroke on tile 0, 0 is held open
+    ana_ed.history.begin("brush");
+    ana_ed.history.touch_tile(ana_ed.doc.as_ref().unwrap(), (0, 0));
+    ana_ed.doc.as_mut().unwrap().tiles.get_mut(&(0, 0)).unwrap().terrain.heights[0] = 9.0;
+    // meanwhile Bruno raises tile 1, 0, and far more comes than the host's queue for Ana holds
+    {
+        let d = bruno_ed.doc.as_mut().unwrap();
+        bruno_ed.history.begin("raise");
+        bruno_ed.history.touch_tile(d, (1, 0));
+        d.tiles.get_mut(&(1, 0)).unwrap().terrain.heights[0] = 5.0;
+        bruno_ed.history.commit();
+    }
+    for i in 0..600 {
+        bruno.live().unwrap().client.send(openmapper_collab::Msg::Say(format!("line {i}")));
+        if i % 50 == 0 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let until = Instant::now() + Duration::from_secs(5);
+    while ana.live().map(|l| l.chat.len() < 200).unwrap_or(false) || !bruno.settled() {
+        ana.tick(&mut ana_ed, Some(&roots));
+        bruno.tick(&mut bruno_ed, Some(&roots));
+        assert!(Instant::now() < until, "chat {:?}", ana.live().map(|l| l.chat.len()));
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    for _ in 0..50 {
+        ana.tick(&mut ana_ed, Some(&roots));
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    // (still in, Bruno's edit held: Ana's stroke is not ended under her)
+    assert_eq!(ana.live().map(|l| l.peers.len()), Some(2), "Ana was let go");
+    assert!(ana_ed.history.is_open());
+    assert_eq!(ana_ed.doc.as_ref().unwrap().tiles[&(1, 0)].terrain.heights[0], 0.0);
+    // the stroke ends: Bruno's edit comes in, Ana's goes out
+    ana_ed.history.commit();
+    let until = Instant::now() + Duration::from_secs(10);
+    let mut quiet = 0;
+    while quiet < 20 {
+        ana.tick(&mut ana_ed, Some(&roots));
+        bruno.tick(&mut bruno_ed, Some(&roots));
+        quiet = if ana.settled() && bruno.settled() { quiet + 1 } else { 0 };
+        assert!(Instant::now() < until, "never settled");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    same(ana_ed.doc.as_ref().unwrap(), bruno_ed.doc.as_ref().unwrap());
+    assert_eq!(ana_ed.doc.as_ref().unwrap().tiles[&(1, 0)].terrain.heights[0], 5.0);
+    assert_eq!(bruno_ed.doc.as_ref().unwrap().tiles[&(0, 0)].terrain.heights[0], 9.0);
+    let _ = std::fs::remove_dir_all(&content);
+}

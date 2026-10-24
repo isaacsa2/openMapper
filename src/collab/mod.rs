@@ -35,6 +35,10 @@ pub const MIN_PASSWORD: usize = 8;
 const MAX_PEERS: usize = 16;
 /// Chat lines kept.
 const CHAT: usize = 200;
+/// The most of the others' work held while an edit of this editor's is open: messages, and
+/// the bytes of their parts.
+const MAX_HELD: usize = 4096;
+const MAX_HELD_BYTES: u64 = 512 << 20;
 
 pub struct Collab {
     pub open: bool,
@@ -85,6 +89,10 @@ pub struct Live {
     pub chat: Vec<(u32, String)>,
     /// What of this editor's presence was sent last.
     presence: presence::Sender,
+    /// What came from the host while an edit was held open, to put in once it is closed,
+    /// and the bytes of the parts it carries.
+    held: std::collections::VecDeque<Msg>,
+    held_bytes: u64,
     pub hosting: Option<Hosting>,
     /// The folder of the map the session is about (another map opened ends it).
     dir: PathBuf,
@@ -194,7 +202,7 @@ impl Collab {
         let sync = Sync::new(&w.states, w.ids, true, doc);
         let addrs = if self.lan { omsi_net::addrs::joinable_addresses().iter().map(|a| (format!("{}:{port}", a.ip), a.label())).collect() } else { Vec::new() };
         let hosting = Hosting { _host: host, _gateway: gw, addrs, tunnel };
-        self.phase = Phase::Live(Box::new(Live { client, sync, you: w.you, peers: w.peers, map: w.map, seen: HashMap::new(), chat: Vec::new(), presence: Default::default(), hosting: Some(hosting), dir: doc.dir.clone() }));
+        self.phase = Phase::Live(Box::new(Live { client, sync, you: w.you, peers: w.peers, map: w.map, seen: HashMap::new(), chat: Vec::new(), presence: Default::default(), held: Default::default(), held_bytes: 0, hosting: Some(hosting), dir: doc.dir.clone() }));
         ed.toast(tr("Hosting this map: others can join it now", "Карта открыта для совместной правки"));
     }
 
@@ -288,22 +296,9 @@ impl Collab {
             ed.toast(tr("Multiplayer ended: another map was opened", "Совместная правка завершена: открыта другая карта"));
             return;
         }
-        // A drag/brush is one history step. Applying a remote tile in its middle would
-        // discard that step while the tool still holds its old starting state. The
-        // client's bounded receive queue provides backpressure until the gesture ends.
-        if ed.history.is_open() {
-            if let Some(p) = l.presence.next(Instant::now(), presence::mine(ed)) {
-                l.client.send(Msg::Presence(p));
-            }
-            return;
-        }
-        let mut notes = Vec::new();
-        let changed = ed.history.take_changed();
-        if !changed.is_empty() {
-            notes.extend(l.sync.edited(changed, doc, &mut ed.history));
-        }
+        // (everything that came is read now, whatever the editor is doing: a reader left
+        // waiting would fill the host's queue for this editor, and the host would let it go)
         let mut gone = None;
-        let mut put = false;
         for e in l.client.poll() {
             match e {
                 Event::Closed(why) => gone = Some(why),
@@ -321,11 +316,32 @@ impl Collab {
                     }
                 }
                 Event::Msg(m) => {
-                    put |= matches!(m, Msg::Applied { seq: None, .. } | Msg::Rejected { .. });
-                    notes.extend(l.sync.received(m, doc, &mut ed.history));
-                    if notes.iter().any(|n| matches!(n, Note::RecoveryFailed(_))) {
-                        break;
-                    }
+                    l.held_bytes += msg_bytes(&m);
+                    l.held.push_back(m);
+                }
+            }
+        }
+        let overflow = gone.is_none() && (l.held.len() > MAX_HELD || l.held_bytes > MAX_HELD_BYTES);
+        if overflow {
+            gone = Some("too much came in while an edit was held open".into());
+        }
+        let mut notes = Vec::new();
+        let mut put = false;
+        // A drag, a brush stroke or a road being drawn is one history step, open until it
+        // ends: the others' edits wait for it (put in its middle they would end the step while
+        // the tool still holds its starting state), and so does sending this editor's.
+        let open = ed.history.is_open();
+        if !open && gone.is_none() {
+            let changed = ed.history.take_changed();
+            if !changed.is_empty() {
+                notes.extend(l.sync.edited(changed, doc, &mut ed.history));
+            }
+            while let Some(m) = l.held.pop_front() {
+                l.held_bytes -= msg_bytes(&m);
+                put |= matches!(m, Msg::Applied { seq: None, .. } | Msg::Rejected { .. });
+                notes.extend(l.sync.received(m, doc, &mut ed.history));
+                if notes.iter().any(|n| matches!(n, Note::RecoveryFailed(_))) {
+                    break;
                 }
             }
         }
@@ -334,7 +350,7 @@ impl Collab {
             keep_selection(ed);
         }
         let Some(doc) = ed.doc.as_mut() else { return };
-        if gone.is_none() && !notes.iter().any(|n| matches!(n, Note::RecoveryFailed(_))) {
+        if !open && gone.is_none() && !notes.iter().any(|n| matches!(n, Note::RecoveryFailed(_))) {
             if let Some(m) = l.sync.next_edit(doc) {
                 l.client.send(m);
             }
@@ -343,7 +359,7 @@ impl Collab {
             l.client.send(m);
         }
         if let Some(p) = l.presence.next(Instant::now(), presence::mine(ed)) {
-            l.client.send(Msg::Presence(p));
+            l.client.send_presence(p);
         }
         // (somebody silent this long has stopped sending: not drawn)
         l.seen.retain(|_, (_, heard)| heard.elapsed() < presence::SEEN_FOR);
@@ -368,11 +384,14 @@ impl Collab {
                 }
             }
         }
+        if overflow {
+            ed.error(tr("Too much of the others' work came in while your edit was held open: multiplayer stopped. The map stays open; it can be saved as a copy.", "Пока ваша правка была открыта, пришло слишком много чужих правок: совместная правка остановлена. Карта остаётся открытой, её можно сохранить как копию."));
+        }
         if let Some(why) = gone {
             log::info!("multiplayer: connection closed: {why}");
             let host = l.hosting.is_some();
             self.leave(ed);
-            if !host {
+            if !host && !overflow {
                 ed.error(tr("The connection to the host was lost. The map stays open; it can be saved as a copy.", "Связь с хостом потеряна. Карта остаётся открытой, её можно сохранить как копию."));
             }
         }
@@ -397,7 +416,7 @@ impl Collab {
         let dir = doc.dir.clone();
         self.joined = Some(doc);
         self.joined_groups = Some(groups);
-        self.phase = Phase::Live(Box::new(Live { client, sync, you: w.you, peers: w.peers, map: w.map, seen: HashMap::new(), chat: Vec::new(), presence: Default::default(), hosting: None, dir }));
+        self.phase = Phase::Live(Box::new(Live { client, sync, you: w.you, peers: w.peers, map: w.map, seen: HashMap::new(), chat: Vec::new(), presence: Default::default(), held: Default::default(), held_bytes: 0, hosting: None, dir }));
     }
 }
 
@@ -469,5 +488,13 @@ pub fn join_error(e: &JoinError) -> String {
         JoinError::Refused(Refusal::Full) => tr("The session is full", "Сессия заполнена").into(),
         JoinError::Refused(Refusal::Name) => tr("Type a name (up to 32 letters)", "Введите имя (до 32 букв)").into(),
         JoinError::Refused(Refusal::Protocol(v)) => format!("{} ({v})", tr("The host has another version of openMapper", "У хоста другая версия openMapper")),
+    }
+}
+
+/// The bytes of the parts a message carries.
+fn msg_bytes(m: &Msg) -> u64 {
+    match m {
+        Msg::Applied { states, .. } | Msg::Rejected { states, .. } => states.iter().map(|s| s.data.as_ref().map(|d| d.len() as u64).unwrap_or(0)).sum(),
+        _ => 0,
     }
 }

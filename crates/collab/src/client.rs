@@ -4,17 +4,25 @@
 use std::io::{self, BufReader, BufWriter, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use crate::wire::{self, MapInfo, Msg, Peer, Refusal, State, PROTOCOL};
+use crate::wire::{self, MapInfo, Msg, Peer, Presence, Refusal, State, PROTOCOL};
 use crate::auth;
 
 /// The most a host's message may carry (a whole map when joining).
 const MAX_FROM_HOST: u64 = 4 << 30;
 /// A live update is bounded like an edit sent to the host; only joining takes a whole map.
 const MAX_UPDATE: u64 = 512 << 20;
-// A paused window or a slow connection must not grow queues without limit.
-const QUEUE: usize = 8;
+/// Messages waiting to go out. Bounded, so a stalled connection cannot grow it without end;
+/// it never fills in use: the editor has one edit on its way at a time, and the presence,
+/// sent often, does not queue (only the latest goes, see `send_presence`).
+const QUEUE: usize = 64;
+/// Messages from the host waiting to be picked up: room for a long busy frame of the editor's
+/// (a big import) before the reader stops reading and the host lets this editor go as slow.
+const INBOX: usize = 4096;
+/// How often the writer looks for a new presence when nothing else goes out.
+const PRESENCE_EVERY: Duration = Duration::from_millis(50);
 const CONNECT: Duration = Duration::from_secs(8);
 /// A host not heard from this long is gone (it pings every few seconds).
 const SILENCE: Duration = Duration::from_secs(45);
@@ -60,6 +68,8 @@ pub enum Event {
 /// A connection to a host; dropping it leaves.
 pub struct Client {
     out: SyncSender<Msg>,
+    /// The latest presence not sent yet (a newer one replaces it).
+    presence: Arc<Mutex<Option<Presence>>>,
     events: Receiver<Event>,
     stream: TcpStream,
 }
@@ -100,9 +110,11 @@ impl Client {
             _ => return Err(JoinError::NotAHost),
         };
         let (out, queue) = mpsc::sync_channel::<Msg>(QUEUE);
-        let (tx, events) = mpsc::sync_channel(QUEUE);
+        let (tx, events) = mpsc::sync_channel(INBOX);
+        let presence = Arc::new(Mutex::new(None));
         let w = stream.try_clone().map_err(JoinError::Io)?;
-        std::thread::Builder::new().name("collab write".into()).spawn(move || write_loop(w, queue)).map_err(JoinError::Io)?;
+        let p = presence.clone();
+        std::thread::Builder::new().name("collab write".into()).spawn(move || write_loop(w, queue, p)).map_err(JoinError::Io)?;
         std::thread::Builder::new()
             .name("collab read".into())
             .spawn(move || loop {
@@ -120,16 +132,22 @@ impl Client {
                 }
             })
             .map_err(JoinError::Io)?;
-        Ok((Client { out, events, stream }, welcome))
+        Ok((Client { out, presence, events, stream }, welcome))
     }
 
-    /// Send a message (queued: never waits).
+    /// Send a message (queued: never waits). A full queue (the connection stalled) closes
+    /// the connection rather than blocking the editor or dropping an edit unseen; the reader
+    /// reports it, and the editor keeps its map open to be saved as a copy.
     pub fn send(&self, m: Msg) {
         if self.out.try_send(m).is_err() {
-            // Never block the editor or silently drop an edit. Closing is reported by the
-            // reader; the editor retains its local document for saving as a copy.
             let _ = self.stream.shutdown(Shutdown::Both);
         }
+    }
+
+    /// Send where this editor works: only the latest goes, however often it is called (an
+    /// older one not sent yet is replaced, never queued).
+    pub fn send_presence(&self, p: Presence) {
+        *self.presence.lock().unwrap_or_else(|e| e.into_inner()) = Some(p);
     }
 
     /// What came since the last call.
@@ -144,17 +162,28 @@ impl Drop for Client {
     }
 }
 
-fn write_loop(w: TcpStream, queue: Receiver<Msg>) {
+fn write_loop(w: TcpStream, queue: Receiver<Msg>, presence: Arc<Mutex<Option<Presence>>>) {
     let mut w = BufWriter::new(w);
+    let mut wrote = Instant::now();
     loop {
-        let m = match queue.recv_timeout(PING_EVERY) {
-            Ok(m) => m,
-            Err(RecvTimeoutError::Timeout) => Msg::Ping,
+        let mut out = match queue.recv_timeout(PRESENCE_EVERY) {
+            Ok(m) => vec![m],
+            Err(RecvTimeoutError::Timeout) => Vec::new(),
             Err(RecvTimeoutError::Disconnected) => break,
         };
-        if w.write_all(&wire::encode(&m)).and_then(|_| w.flush()).is_err() {
+        if let Some(p) = presence.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            out.push(Msg::Presence(p));
+        }
+        if out.is_empty() && wrote.elapsed() >= PING_EVERY {
+            out.push(Msg::Ping);
+        }
+        if out.is_empty() {
+            continue;
+        }
+        if out.iter().try_for_each(|m| w.write_all(&wire::encode(m))).and_then(|_| w.flush()).is_err() {
             break;
         }
+        wrote = Instant::now();
     }
     let _ = w.get_ref().shutdown(Shutdown::Both);
 }
@@ -171,7 +200,7 @@ mod tests {
         remote.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
         let (out, queue) = mpsc::sync_channel(QUEUE);
         let (_tx, events) = mpsc::sync_channel(QUEUE);
-        let client = Client { out, events, stream };
+        let client = Client { out, presence: Default::default(), events, stream };
         for _ in 0..QUEUE {
             client.send(Msg::NeedIds);
         }
