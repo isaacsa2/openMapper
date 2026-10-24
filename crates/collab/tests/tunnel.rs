@@ -8,7 +8,7 @@ use openmapper_collab::{Client, Event, Host, HostConfig, MapInfo, Msg, Part, Sta
 
 #[test]
 fn a_peer_joins_and_edits_through_the_gateway() {
-    let cfg = HostConfig { bind: "127.0.0.1:0".parse().unwrap(), password: "a long password".into(), map: MapInfo { folder: "Testmap".into(), name: "Test".into() }, next_id: 1, max_peers: 8 };
+    let cfg = HostConfig { bind: "127.0.0.1:0".parse().unwrap(), password: "a long password".into(), work: 10, map: MapInfo { folder: "Testmap".into(), name: "Test".into() }, next_id: 1, max_peers: 8, ..Default::default() };
     // (a tile big enough to need many WebSocket messages)
     let tile: Vec<u8> = (0..3_000_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
     let h = Host::start(cfg, vec![State { part: Part::Tile(0, 0), version: 0, data: Some(tile.clone()) }]).unwrap();

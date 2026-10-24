@@ -74,6 +74,17 @@ pub struct Presence {
     pub tool: String,
 }
 
+/// Why a host turned an edit down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Why {
+    /// One of its parts was changed by somebody else first.
+    Stale,
+    /// The host would hold more than it takes (bytes or parts), or the edit is too big.
+    TooMuch,
+    /// A tile far outside the map, or a part the host does not keep.
+    NotThere,
+}
+
 /// Why a host turned somebody away.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Refusal {
@@ -88,15 +99,16 @@ pub enum Refusal {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Msg {
     // host → peer
-    /// The first message: the host's protocol and the nonce the password is proved with.
-    Challenge { protocol: u32, nonce: String },
+    /// The first message: the host's protocol, the nonce the password is proved with, and the
+    /// salt and work factor its key is derived with (see `auth`).
+    Challenge { protocol: u32, nonce: String, salt: String, work: u32 },
     Welcome { you: Peer, map: MapInfo, ids: (i64, i64), peers: Vec<Peer>, states: Vec<State> },
     Refused(Refusal),
     /// An edit taken: the parts with their new versions (`seq`: the author's, for the author).
     Applied { author: u32, seq: Option<u64>, states: Vec<State> },
     /// An edit turned down (one of its parts changed meanwhile): each part it changed, as it
     /// is now.
-    Rejected { seq: u64, states: Vec<State> },
+    Rejected { seq: u64, why: Why, states: Vec<State> },
     Peers(Vec<Peer>),
     Seen { peer: u32, presence: Presence },
     Said { peer: u32, text: String },
