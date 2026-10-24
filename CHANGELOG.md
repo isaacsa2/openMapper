@@ -4,6 +4,22 @@ Releases are tagged `v<version>`; the downloads are on the
 [Releases](https://github.com/openOMSI-org/openMapper/releases) page, each with the notes of its
 version from this file.
 
+## Unreleased
+
+### Added
+- **Multiplayer** (File > Multiplayer…): several people edit one map at once. One hosts the map open in their openMapper; the others join on the same network or from anywhere through a free Cloudflare quick tunnel (openOMSI's own). Tiles, the global settings and groups are shared as they are made; an edit made on a tile somebody else changed first is put back and its author told. Undo leaves the others' edits alone, and each editor hands out IDCodes of its own. The others' cursors, names and selections are drawn in the view in their colours. The timetable, the traffic and the descriptions stay the host's for now, and the host saves the map.
+
+## 0.1.3 - 2026-10-24
+
+### Changed
+- **Selection no longer covers what is selected** ([#11](https://github.com/openOMSI-org/openMapper/issues/11)): a selected road or object is not painted orange any more. A road shows a thin outline along its two edges, an object a small ball; the road, kerb or object stays visible under it.
+- **Grips are balls sized by the road**: the points that reshape a selected spline are small shaded balls, as big as the spline is wide (a kerb's small, a street's larger) and never smaller than a few pixels however far the camera is. They are picked by the ray through the ball, with room beyond its edge, so a click near the edge works.
+- The licence is GNU AGPL v3 only (`AGPL-3.0-only`), as openOMSI's; the earlier MIT notice stays for the versions distributed under it.
+- Dependencies updated: `rfd` 0.17, `base64` 0.23, `tiny-skia` 0.12, `serde_json`, and the GitHub Actions of the release setup.
+
+### Fixed
+- The version badge in the README showed a fixed number; it now follows the latest release by itself.
+
 ## 0.1.2 - 2026-10-23
 
 ### Added
