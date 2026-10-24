@@ -1,5 +1,10 @@
 # Multiplayer editing
 
+The aim is a shared workspace, like Roblox Studio's Team Create: people build the same map
+together, see who is working where and keep their own undo history without undoing somebody
+else's work. This first version does part of that; what it does not do yet is listed at the
+end.
+
 File > Multiplayer… lets several people edit one map at once. One of them hosts the map open
 in their openMapper; the others join with an address.
 
@@ -30,6 +35,29 @@ tools and selections are drawn in the view.
 **Not shared yet:** the timetable, the traffic and AI and the descriptions. They stay the
 host's: a guest's change of them is put back, with a message. **The host saves the map**; a
 guest cannot save during the session, and can save their copy once they leave.
+
+## Conflicts, held edits and recovery
+
+Conflicts are found per tile (and per global settings and groups). The host takes an edit only
+when every part of it is still at the version it was made from.
+
+* **An edit is sent once its gesture ends.** A drag, a brush stroke or a road being drawn is
+  one history step, open until it ends; while it is open, what the others did is read and
+  held, and put in once it ends (put in its middle it would end the step while the tool still
+  holds its starting state). Cursors, the list of people and the chat come in at once. At most
+  4096 messages or 512 MiB are held this way; beyond that the session ends with a message and
+  the map stays open.
+* **Conflicting local work is kept.** Before the host's state replaces local work it
+  conflicts with (an edit turned down, or a change not sent yet that somebody else's edit
+  replaces), that work is written to a recovery file in the map's `openMapper/conflicts`
+  folder (512 MiB at most). If it cannot be written, the session ends and the local work stays
+  open. After leaving, File > Multiplayer > Recover a conflicting edit… puts a copy back into
+  the open map as one undoable edit; it does not save the map nor send the edit to the session
+  left. The folder is not emptied by itself.
+* **Queues are bounded.** The editor sends one edit at a time; its cursor is not queued (only
+  the latest goes). A send queue that still fills (a stalled connection) closes the connection
+  rather than blocking the window or dropping an edit unseen; the map stays open and can be
+  saved as a separate copy.
 
 ## Security: what to know before hosting
 
@@ -68,3 +96,14 @@ A host takes nothing unbounded from whoever reaches its port:
 
 An edit beyond these is turned down whole and its author told why. Each edit sends whole tiles:
 painting on tiles with many layers through the tunnel can be slow.
+
+## Not done yet
+
+* Conflicts cover whole tiles: two people editing different objects on one tile can conflict.
+  Object and property changes, and terrain by region, need a change of the protocol.
+* The timetable, the traffic, the descriptions and chrono patches are not edited together yet.
+* A connection does not resume by itself and edits made offline are not replayed: joining
+  again starts from the host's map as it is. Keep a separate copy first if local work matters.
+* Sending the content (objects, splines, textures), read-only guests, roles, removing somebody
+  from a session and projects that stay hosted are not there.
+* How it behaves on Windows and macOS, and through a real tunnel, still needs testing by hand.

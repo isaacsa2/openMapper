@@ -9,6 +9,7 @@
 
 pub mod codec;
 pub mod presence;
+pub(crate) mod recovery;
 pub mod sync;
 #[cfg(test)]
 mod tests;
@@ -287,6 +288,15 @@ impl Collab {
             ed.toast(tr("Multiplayer ended: another map was opened", "Совместная правка завершена: открыта другая карта"));
             return;
         }
+        // A drag/brush is one history step. Applying a remote tile in its middle would
+        // discard that step while the tool still holds its old starting state. The
+        // client's bounded receive queue provides backpressure until the gesture ends.
+        if ed.history.is_open() {
+            if let Some(p) = l.presence.next(Instant::now(), presence::mine(ed)) {
+                l.client.send(Msg::Presence(p));
+            }
+            return;
+        }
         let mut notes = Vec::new();
         let changed = ed.history.take_changed();
         if !changed.is_empty() {
@@ -313,6 +323,9 @@ impl Collab {
                 Event::Msg(m) => {
                     put |= matches!(m, Msg::Applied { seq: None, .. } | Msg::Rejected { .. });
                     notes.extend(l.sync.received(m, doc, &mut ed.history));
+                    if notes.iter().any(|n| matches!(n, Note::RecoveryFailed(_))) {
+                        break;
+                    }
                 }
             }
         }
@@ -321,8 +334,10 @@ impl Collab {
             keep_selection(ed);
         }
         let Some(doc) = ed.doc.as_mut() else { return };
-        if let Some(m) = l.sync.next_edit(doc) {
-            l.client.send(m);
+        if gone.is_none() && !notes.iter().any(|n| matches!(n, Note::RecoveryFailed(_))) {
+            if let Some(m) = l.sync.next_edit(doc) {
+                l.client.send(m);
+            }
         }
         if let Some(m) = l.sync.keep_ids(doc) {
             l.client.send(m);
@@ -346,6 +361,11 @@ impl Collab {
                 Note::Replaced { by, parts } => ed.toast(format!("{} {} ({parts})", name(by), tr("changed what you were editing: it is as they left it", "изменил(а) то, что вы правили: оставлено как у него/неё"))),
                 Note::HostOnly => ed.error(tr("The timetable, the traffic and the descriptions are the host's in multiplayer: your change was put back", "Расписание, трафик и описания в совместной правке — у хоста: ваша правка отменена")),
                 Note::Unreadable(p) => log::warn!("multiplayer: {p:?} could not be read, left as it was"),
+                Note::Recovered(path) => ed.toast(format!("{}: {}", tr("Your conflicting edit was kept", "Ваша конфликтующая правка сохранена"), path.display())),
+                Note::RecoveryFailed(error) => {
+                    ed.error(format!("{}: {error}", tr("Could not keep your conflicting edit; multiplayer stopped", "Не удалось сохранить конфликтующую правку; совместная правка остановлена")));
+                    gone = Some(error);
+                }
             }
         }
         if let Some(why) = gone {

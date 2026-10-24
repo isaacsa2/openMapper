@@ -28,6 +28,8 @@ pub enum Note {
     HostOnly,
     /// A part could not be read (an editor of another version?): left as it was.
     Unreadable(Part),
+    Recovered(std::path::PathBuf),
+    RecoveryFailed(String),
 }
 
 pub struct Sync {
@@ -113,11 +115,13 @@ impl Sync {
                 self.put(states, doc, history, &mut notes);
             }
             Msg::Rejected { seq, why, states } => {
+                // (put back while the edit is still the one on its way: what it held is kept
+                // for recovery first)
+                notes.push(Note::TurnedDown { tiles: states.iter().filter(|s| matches!(s.part, Part::Tile(..))).count(), why });
+                self.put(states, doc, history, &mut notes);
                 if self.flight.as_ref().map(|f| f.0) == Some(seq) {
                     self.flight = None;
                 }
-                notes.push(Note::TurnedDown { tiles: states.iter().filter(|s| matches!(s.part, Part::Tile(..))).count(), why });
-                self.put(states, doc, history, &mut notes);
             }
             Msg::Ids(a, b) => {
                 self.spare = Some((a, b));
@@ -130,6 +134,18 @@ impl Sync {
 
     /// The host's state of these parts into the map.
     fn put(&mut self, mut states: Vec<State>, doc: &mut Document, history: &mut History, notes: &mut Vec<Note>) {
+        let conflicts: Vec<Part> = states.iter().map(|s| s.part).filter(|p| {
+            self.dirty.contains(p) || self.flight.as_ref().map(|(_, parts)| parts.contains(p)).unwrap_or(false)
+        }).collect();
+        if !conflicts.is_empty() {
+            match super::recovery::keep(doc, &conflicts) {
+                Ok(path) => notes.push(Note::Recovered(path)),
+                Err(error) => {
+                    notes.push(Note::RecoveryFailed(error.to_string()));
+                    return;
+                }
+            }
+        }
         // (the global settings first: the tiles' masks are made to fit its ground layers)
         states.sort_by_key(|s| s.part != Part::Global);
         let mut forget = Changed::default();
