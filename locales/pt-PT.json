@@ -39,7 +39,7 @@
   "Could not copy the map": "Não foi possível copiar o mapa",
   "Could not move the map": "Não foi possível mover o mapa",
   "Terrain flattened; splines laid on it:": "Terreno nivelado e splines posicionadas:",
-  "This road type has no textures to make PBR maps of": "Este Straßentyp hat keine Texturen, aus denen PBR-Maps erzeugt werden können.",
+  "This road type has no textures to make PBR maps of": "Este tipo de estrada não tem texturas para gerar mapas PBR.",
   "Pictures": "Imagens",
   "Import the map's thumbnail": "Importar a miniatura do mapa",
   "The map's thumbnail is set: openOMSI shows it where maps are chosen.": "A miniatura do mapa está definida: openOMSI mostra onde os mapas são escolhidos.",
