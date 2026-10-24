@@ -126,6 +126,8 @@ pub struct App {
     gamecheck: crate::gamecheck::GameCheck,
     /// Getting started.
     guide: crate::ui_guide::Guide,
+    /// File > Multiplayer: the session, when there is one.
+    collab: crate::collab::Collab,
     updater: crate::updater::Updater,
     /// A full-size picture of the view is taken this frame (View menu, F12).
     snapshot: bool,
@@ -175,6 +177,7 @@ impl App {
             trace: Default::default(),
             gamecheck: Default::default(),
             guide: Default::default(),
+            collab: Default::default(),
             updater: crate::updater::Updater::new(),
             snapshot: false,
             snapshot_done: false,
@@ -188,6 +191,8 @@ impl App {
         if std::env::var_os("OPENMAPPER_NEWMAP").is_some() {
             app.ui.new_map = Some(Default::default());
         }
+        // OPENMAPPER_MULTIPLAYER: File > Multiplayer open at the start
+        app.collab.open = std::env::var_os("OPENMAPPER_MULTIPLAYER").is_some();
         app
     }
 
@@ -795,6 +800,10 @@ impl App {
     }
 
     fn save(&mut self) -> bool {
+        if self.collab.is_guest() {
+            self.ed.error(tr("In multiplayer the host saves the map. Leave the session to save this as a copy of your own.", "В совместной правке карту сохраняет хост. Выйдите из сессии, чтобы сохранить копию для себя."));
+            return false;
+        }
         // (a scenario's things being edited on the map are not the map's)
         self.chrono.end_session(&mut self.ed);
         let Some(doc) = self.ed.doc.as_mut() else { return false };
@@ -1291,6 +1300,7 @@ impl App {
             Action::Trace => self.trace.open = !self.trace.open,
             Action::GameCheck => self.game_check(),
             Action::Guide => self.guide.open = !self.guide.open,
+            Action::Multiplayer => self.collab.open = !self.collab.open,
             Action::Updates => self.updater.window = true,
             Action::Export => self.export(),
             Action::ToggleFavourite(rel) => {
@@ -1568,6 +1578,11 @@ impl App {
             a.poll();
         }
         self.lib.poll();
+        self.collab.tick(&mut self.ed, self.roots.as_ref());
+        if let Some(doc) = self.collab.take_joined() {
+            self.after_open(doc);
+            self.collab.joined_open(&mut self.ed);
+        }
         // (the switches on offer, once the library is read)
         if !self.lib.scanning && self.ed.switch_catalogue.is_empty() && !self.lib.assets.is_empty() {
             self.ed.switch_catalogue = crate::switches::catalogue(&self.lib);
@@ -1819,6 +1834,7 @@ impl App {
                 guide = self.guide.window(&ctx, &self.ed, &self.lib, &self.prefs, self.game.is_some(), self.ui.check.errors_left() == Some(0));
             }
             crate::ui_uv::window(&ctx, &mut self.ui.uv, &mut self.ui.uv_open, &mut self.ed, self.roots.as_ref());
+            crate::ui_collab::window(&ctx, &mut self.collab, &mut self.ed);
             crate::ui_newmap::dialog(&ctx, &mut self.ui.new_map, self.roots.as_ref(), &self.texture_files, &self.swatches, &mut wanted_swatches, &mut actions);
             ui::confirm_unsaved(&ctx, &mut self.ui, &mut actions);
             if let Some(m) = &self.recover {

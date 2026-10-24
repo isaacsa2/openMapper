@@ -139,6 +139,8 @@ pub enum Action {
     SetGraphics(crate::render::quality::Quality),
     /// Open or close the Getting started guide.
     Guide,
+    /// Open or close File > Multiplayer.
+    Multiplayer,
     /// Help > Updates.
     Updates,
     /// Map > Tiles from another map (the maps to choose from are listed first).
@@ -505,6 +507,9 @@ pub fn welcome(root: &mut egui::Ui, st: &mut UiState, prefs: &Prefs, omsi: Optio
                 if menu_item(ui, Some(Icon::Import), tr("Import assets…", "Импорт ассетов…"), "", omsi.is_some()) {
                     actions.push(Action::Import);
                 }
+                if menu_item(ui, Some(Icon::Walk), tr("Multiplayer…", "Совместная правка…"), "", omsi.is_some()) {
+                    actions.push(Action::Multiplayer);
+                }
                 ui.separator();
                 if menu_item(ui, Some(Icon::Settings), tr("OMSI 2 folder…", "Папка OMSI 2…"), "", true) {
                     actions.push(Action::ChooseOmsi);
@@ -821,6 +826,9 @@ fn menu_bar(root: &mut egui::Ui, st: &mut UiState, ed: &mut Editor, can_undo: bo
                 }
                 if menu_item(ui, Some(Icon::History), tr("Earlier versions…", "Прошлые версии…"), "", true) {
                     st.versions_open = true;
+                }
+                if menu_item(ui, Some(Icon::Walk), tr("Multiplayer…", "Совместная правка…"), "", true) {
+                    actions.push(Action::Multiplayer);
                 }
                 ui.separator();
                 if menu_item(ui, None, tr("Close map", "Закрыть карту"), "", true) {

@@ -18,6 +18,7 @@ use omsi_map::{GlobalCfg, GroundTex, MapObject, MapSpline, Terrain, Tile, TERRAI
 use crate::i18n::tr;
 
 pub use save::save;
+pub(crate) use save::{global_text, tile_text};
 
 pub type TileKey = (i32, i32);
 

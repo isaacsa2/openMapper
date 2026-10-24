@@ -173,7 +173,7 @@ pub(crate) fn copy_missing(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn global_text(doc: &Document) -> String {
+pub(crate) fn global_text(doc: &Document) -> String {
     let g = &doc.global;
     let mut s = header();
     let kw = |s: &mut String, k: &str, lines: &[String]| {
