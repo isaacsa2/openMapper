@@ -52,7 +52,7 @@ impl Chord {
 }
 
 macro_rules! keys {
-    ($($c:ident $n:expr),* $(,)?) => { &[$((KeyCode::$c, $n)),*] };
+    ($($c:ident $n:expr_2021),* $(,)?) => { &[$((KeyCode::$c, $n)),*] };
 }
 
 /// The keys that can be chosen, with the names shown and kept.

@@ -290,6 +290,36 @@ pub fn write_zip(plan: &Plan, readme: &str, out: &Path) -> anyhow::Result<u64> {
     Ok(std::fs::metadata(out).map(|m| m.len()).unwrap_or(0))
 }
 
+/// Put the planned files into an OMSI 2 folder (`maps\<folder>`, the objects, roads and
+/// textures made for the map), the way unpacking the exported zip into it would. A file that is
+/// already there and as new as ours is left alone. (copied, left alone)
+pub fn install_into(plan: &Plan, omsi: &Path) -> anyhow::Result<(usize, usize)> {
+    let (mut copied, mut same) = (0, 0);
+    for (rel, src) in &plan.files {
+        let dst = rel.split('/').fold(omsi.to_path_buf(), |p, part| p.join(part));
+        let (sm, dm) = (std::fs::metadata(src)?, std::fs::metadata(&dst).ok());
+        if let Some(dm) = dm {
+            let newer = match (sm.modified(), dm.modified()) {
+                (Ok(s), Ok(d)) => d >= s,
+                _ => false,
+            };
+            if dm.len() == sm.len() && newer {
+                same += 1;
+                continue;
+            }
+        }
+        if let Some(dir) = dst.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?;
+        }
+        // (under a temporary name first: a program that is reading the file never sees half of it)
+        let tmp = dst.with_extension("openmapper-new");
+        std::fs::copy(src, &tmp).map_err(|e| anyhow::anyhow!("{}: {e}", dst.display()))?;
+        std::fs::rename(&tmp, &dst).map_err(|e| anyhow::anyhow!("{}: {e}", dst.display()))?;
+        copied += 1;
+    }
+    Ok((copied, same))
+}
+
 /// Export the saved map to `out`.
 pub fn export(doc: &Document, roots: &Roots, out: &Path) -> anyhow::Result<(Plan, u64)> {
     let plan = plan(doc, roots);

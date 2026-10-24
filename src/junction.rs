@@ -775,7 +775,7 @@ pub fn make_with(doc: &mut Document, assets: &mut Assets, content: &Path, asphal
         }
     }
     std::fs::write(dir.join(format!("{name}.sco")), omsi_cfg::encode_text(&sco.replace('\n', "\r\n")))?;
-    omsi_cfg::content_changed();
+    crate::hot::own_change();
     let k = tile_of(centre.truncate());
     let k = if doc.tiles.contains_key(&k) { k } else { arms[0].key };
     let org = tile_origin(k);
@@ -832,7 +832,7 @@ pub fn remove_unused(dir: &Path, folder: &str, used: &std::collections::HashSet<
         n += 1;
     }
     if n > 0 {
-        omsi_cfg::content_changed();
+        crate::hot::own_change();
     }
     n
 }

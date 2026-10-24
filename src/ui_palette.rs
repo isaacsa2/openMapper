@@ -22,7 +22,7 @@ struct Command {
 }
 
 macro_rules! cmd {
-    ($icon:expr, $en:literal, $ru:literal, $words:literal, $key:literal, $run:expr) => {
+    ($icon:expr_2021, $en:literal, $ru:literal, $words:literal, $key:literal, $run:expr_2021) => {
         Command { icon: $icon, name: tr($en, $ru), words: concat!($en, " ", $ru, " ", $words), key: $key, run: $run }
     };
 }
@@ -85,6 +85,7 @@ fn commands() -> Vec<Command> {
         cmd!(Icon::Tiles, "Tiles from another map…", "Тайлы из другой карты…", "merge join import combine объединить соединить импорт", "", |_, _, a| a.push(Action::MergeTiles)),
         cmd!(Icon::CheckCircle, "Check in openOMSI…", "Проверка в openOMSI…", "game verify validate offscreen игра проверить", "", |_, _, a| a.push(Action::GameCheck)),
         cmd!(Icon::Play, "Test drive in openOMSI", "Тест-драйв в openOMSI", "play run game drive играть запустить", "F5", |_, _, a| a.push(Action::Play)),
+        cmd!(Icon::Play, "Test drive in OMSI 2 (the original)", "Тест-драйв в оригинальном OMSI 2", "play omsi original game drive оригинал игра запустить", "", |_, _, a| a.push(Action::PlayOriginal)),
         cmd!(Icon::Flag, "Test drive from the start point nearest the view", "Тест-драйв с ближайшей к виду точки старта", "play here entry start drive играть отсюда старт", "Shift+F5", |_, _, a| a.push(Action::PlayHere(false))),
         cmd!(Icon::Visible, "See this view in openOMSI", "Посмотреть этот вид в openOMSI", "free camera look game свободная камера игра вид", "", |_, _, a| a.push(Action::PlayHere(true))),
         // View

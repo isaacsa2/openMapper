@@ -4,5 +4,6 @@ fn main() {
         let _ = embed_resource::compile("assets/windows/openmapper.rc", embed_resource::NONE);
     }
     println!("cargo:rerun-if-changed=assets/windows/openmapper.rc");
+    println!("cargo:rerun-if-changed=assets/windows/openmapper.manifest");
     println!("cargo:rerun-if-changed=assets/icons/app/openmapper.ico");
 }

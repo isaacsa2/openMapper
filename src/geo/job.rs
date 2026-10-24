@@ -56,10 +56,15 @@ pub fn start(spec: Spec) -> Job {
     let cancel = Arc::new(AtomicBool::new(false));
     let done = Arc::new(AtomicUsize::new(0));
     let job = Job { rx, cancel: cancel.clone(), done: done.clone(), total: spec.tiles.len(), dir: spec.dir.clone() };
-    std::thread::spawn(move || {
-        let end = run(&spec, &tx, &cancel, &done);
+    std::thread::Builder::new().name("geo-job".into()).stack_size(16 << 20).spawn(move || {
+        // (a panic on an odd answer ends the job with a message, it does not leave the window
+        // waiting for a job that is gone)
+        let end = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&spec, &tx, &cancel, &done))).unwrap_or_else(|_| Err(tr("Stopped by an internal error (see the log)", "Остановлено внутренней ошибкой (см. журнал)").into()));
+        if let Err(e) = &end {
+            log::warn!("geo job ended: {e}");
+        }
         let _ = tx.send(Msg::Done(end.err()));
-    });
+    }).expect("start the geo job thread");
     job
 }
 
@@ -174,7 +179,18 @@ fn run(spec: &Spec, tx: &Sender<Msg>, cancel: &AtomicBool, done: &AtomicUsize) -
             }
             Ok(())
         };
-        match one() {
+        // (a tile that fails is tried again before it is given up: a dropped connection or a
+        // busy server is not the end of that tile)
+        let mut result = one();
+        for attempt in 1..=2 {
+            if result.is_ok() || cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            log::info!("tile {k:?}: {:?}, trying again ({attempt})", result.as_ref().err());
+            std::thread::sleep(std::time::Duration::from_millis(800 * attempt));
+            result = one();
+        }
+        match result {
             Ok(()) => failed = 0,
             Err(e) => {
                 if cancel.load(Ordering::Relaxed) {

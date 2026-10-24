@@ -85,6 +85,9 @@ pub struct Prefs {
     /// program restarted by itself) or "off" (not looked for).
     #[serde(default)]
     pub update_mode: String,
+    /// The user agreed that test drives in OMSI 2 itself copy the map into its folder.
+    #[serde(default)]
+    pub omsi2_copy_ok: bool,
 }
 
 impl Prefs {
@@ -212,6 +215,11 @@ pub fn content_dir() -> PathBuf {
         }
     }
     openomsi_data_dir().join("content")
+}
+
+/// OMSI 2's own program (`Omsi.exe`) in an installation, whatever the case of its name.
+pub fn omsi2_exe(root: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(root).ok()?.flatten().map(|e| e.path()).find(|p| p.is_file() && p.file_name().map(|f| f.to_string_lossy().eq_ignore_ascii_case("omsi.exe")).unwrap_or(false))
 }
 
 /// The openOMSI game to test maps with: of every copy found (beside openMapper, the one

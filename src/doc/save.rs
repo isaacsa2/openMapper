@@ -203,7 +203,11 @@ fn global_text(doc: &Document) -> String {
         kw(&mut s, "LHT", &[]);
     }
     if g.background_image.len() == 5 {
-        kw(&mut s, "backgroundimage", &g.background_image);
+        // (OMSI's editor reads six lines here, openOMSI's reader keeps five: without the sixth
+        // the original editor takes the next keyword for it and cannot open the map)
+        let mut lines = g.background_image.clone();
+        lines.push("0".into());
+        kw(&mut s, "backgroundimage", &lines);
     }
     if g.map_cam.len() == 8 {
         kw(&mut s, "mapcam", &g.map_cam.iter().map(|v| num(*v)).collect::<Vec<_>>());
@@ -275,9 +279,11 @@ fn global_text(doc: &Document) -> String {
 
 pub(crate) fn tile_text(t: &Tile) -> String {
     let mut s = header();
-    s.push_str("[version]\n14\n\n[terrain]\n\n");
+    // ([terrain] and [water] carry a line of their own, empty, then the blank line that
+    // ends the section, as OMSI's editor writes them and expects them)
+    s.push_str("[version]\n14\n\n[terrain]\n\n\n");
     if t.has_water {
-        s.push_str("[water]\n\n");
+        s.push_str("[water]\n\n\n");
     }
     if t.variable_terrain_lightmap {
         s.push_str("[variable_terrainlightmap]\n\n");
@@ -288,13 +294,22 @@ pub(crate) fn tile_text(t: &Tile) -> String {
     for sp in t.splines.iter().filter(|s| !s.deleted) {
         spline(&mut s, sp);
     }
+    // (every object of the tile is numbered by its place, as OMSI's editor numbers them)
+    let mut n = 0;
+    let mut numbered = |s: &mut String| {
+        let _ = writeln!(s, "Object Nr. {n}");
+        n += 1;
+    };
     for o in &t.objects {
+        numbered(&mut s);
         object(&mut s, o, false);
     }
     for a in &t.spline_attachments {
+        numbered(&mut s);
         attachment(&mut s, a);
     }
     for o in &t.attach_objects {
+        numbered(&mut s);
         object(&mut s, o, true);
     }
     s
@@ -363,10 +378,8 @@ pub(crate) fn spline(s: &mut String, sp: &MapSpline) {
         let _ = writeln!(s, "{}", num(sp.delta_h.unwrap_or(0.0)));
     }
     let _ = write!(s, "{}\n{}\n{}\n{}\n{}\n", num(sp.cant_start), num(sp.cant_end), num(sp.skew_start), num(sp.skew_end), num(sp.tex_offset));
-    if sp.mirror {
-        s.push_str("mirror\n");
-    }
-    s.push('\n');
+    // (a line for the mirror flag, empty when there is none, then the section's blank line)
+    s.push_str(if sp.mirror { "mirror\n\n" } else { "\n\n" });
     if sp.terrain_align_flag {
         s.push_str("[spline_terrain_align]\n\n");
     }
@@ -451,6 +464,34 @@ mod tests {
         let o = &back.objects[0];
         assert_eq!((o.id, o.pos, o.rot[0]), (9, [100.0, 150.5, 0.0], 90.0));
         assert_eq!(o.extra, vec!["Hauptstr.".to_string()]);
+    }
+
+    /// `OMSI_ROUNDTRIP_IN=<folder of .map files> OMSI_ROUNDTRIP_OUT=<folder>`: every tile of the
+    /// input is read and written again (to compare with what OMSI's own editor wrote).
+    #[test]
+    #[ignore]
+    fn rewrite_tiles_for_comparison() {
+        let (Some(i), Some(o)) = (std::env::var_os("OMSI_ROUNDTRIP_IN"), std::env::var_os("OMSI_ROUNDTRIP_OUT")) else { return };
+        std::fs::create_dir_all(&o).unwrap();
+        for e in std::fs::read_dir(i).unwrap().flatten() {
+            let p = e.path();
+            if p.extension().map(|x| x == "map").unwrap_or(false) {
+                let t = Tile::load(&p).unwrap();
+                std::fs::write(Path::new(&o).join(p.file_name().unwrap()), utf16(&tile_text(&t))).unwrap();
+            }
+        }
+    }
+
+    /// `OMSI_ROUNDTRIP_CFG=<global.cfg> OMSI_ROUNDTRIP_OUT=<folder>`: a map's global.cfg read
+    /// and written again.
+    #[test]
+    #[ignore]
+    fn rewrite_global_for_comparison() {
+        let (Some(c), Some(o), Some(root)) = (std::env::var_os("OMSI_ROUNDTRIP_CFG"), std::env::var_os("OMSI_ROUNDTRIP_OUT"), std::env::var_os("OMSI_ROOT")) else { return };
+        let roots = crate::install::Roots::new(root.into());
+        let doc = Document::load(&roots, Path::new(&c), |_| {}).unwrap();
+        std::fs::create_dir_all(&o).unwrap();
+        std::fs::write(Path::new(&o).join("global.cfg"), utf16(&global_text(&doc))).unwrap();
     }
 
     #[test]

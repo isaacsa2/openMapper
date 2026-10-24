@@ -162,7 +162,7 @@ impl App {
     pub(super) fn forget_object(&mut self, rel: &str) {
         let Some(roots) = &self.roots else { return };
         let (dir, _) = editable::folder_of(roots, rel);
-        omsi_cfg::content_changed();
+        crate::hot::own_change();
         if let Some(a) = &mut self.assets {
             a.forget_object(rel, &dir);
         }
@@ -388,6 +388,9 @@ impl App {
                 MeshAction::Bake(choice) => self.bake(choice)?,
                 MeshAction::NewSignal(lamps) => self.new_signal(&lamps)?,
                 MeshAction::NewLamp => self.new_lamp()?,
+                MeshAction::NewPicture(s) => self.new_picture(&s)?,
+                MeshAction::NewLight(s) => self.new_light(&s)?,
+                MeshAction::NewSound(s) => self.new_sound(&s)?,
                 MeshAction::SplinesToObject(replace) => self.splines_to_object(replace)?,
             }
             Ok(())
@@ -809,6 +812,51 @@ impl App {
         self.ed.set_tool(crate::editor::Tool::Objects);
         self.ed.object_type = Some(rel);
         self.ed.toast(tr("Signal head made: click where it stands (near a crossing with a light program it links to it)", "Светофор создан: кликните, где он стоит (рядом с перекрёстком со светофорной программой он к ней привяжется)"));
+        Ok(())
+    }
+
+    /// A picture or a texture chosen from a file, made a panel object put on the map with the
+    /// next click.
+    fn new_picture(&mut self, s: &crate::makers::Settings) -> anyhow::Result<()> {
+        let Some(roots) = self.roots.clone() else { return Ok(()) };
+        let Some(file) = rfd::FileDialog::new().set_title(tr("Choose a picture or a texture", "Выберите картинку или текстуру")).add_filter(tr("Pictures", "Картинки"), &["png", "jpg", "jpeg", "bmp", "tga", "dds", "tif", "tiff", "webp"]).pick_file() else { return Ok(()) };
+        let img = crate::models::picture(None, Some(&file)).ok_or_else(|| anyhow::anyhow!("{}: {}", tr("cannot read the picture", "картинка не читается"), file.display()))?;
+        let rel = editable::new_rel(&roots, &self.map_folder(), "Picture");
+        let (dir, stem) = editable::folder_of(&roots, &rel);
+        let name = bring_picture(&file, &dir.join("texture"), &stem)?;
+        let src = crate::makers::picture(&name, img.width() as f32 / img.height().max(1) as f32, crate::models::alpha_of(&img), s);
+        editable::save(&roots, &rel, &src)?;
+        self.lib.start_scan(&roots);
+        self.ed.set_tool(crate::editor::Tool::Objects);
+        self.ed.object_type = Some(rel);
+        self.ed.toast(tr("Picture made: click where it goes (it can be moved, turned and scaled after)", "Картинка создана: кликните, куда её поставить (потом её можно двигать, поворачивать и масштабировать)"));
+        Ok(())
+    }
+
+    /// A light source: a lamp that glows and lights the ground, put on the map with the next click.
+    fn new_light(&mut self, s: &crate::makers::Settings) -> anyhow::Result<()> {
+        let Some(roots) = self.roots.clone() else { return Ok(()) };
+        let rel = editable::new_rel(&roots, &self.map_folder(), "Light");
+        editable::save(&roots, &rel, &crate::makers::light_source(s))?;
+        self.lib.start_scan(&roots);
+        self.ed.set_tool(crate::editor::Tool::Objects);
+        self.ed.object_type = Some(rel);
+        self.ed.toast(tr("Light made: click where it shines", "Свет создан: кликните, где он светит"));
+        Ok(())
+    }
+
+    /// A sound source from a sound file, put on the map with the next click.
+    fn new_sound(&mut self, s: &crate::makers::Settings) -> anyhow::Result<()> {
+        let Some(roots) = self.roots.clone() else { return Ok(()) };
+        let Some(wav) = rfd::FileDialog::new().set_title(tr("Choose a sound", "Выберите звук")).add_filter(tr("Sounds", "Звуки"), &["wav"]).pick_file() else { return Ok(()) };
+        let rel = editable::new_rel(&roots, &self.map_folder(), "Sound");
+        let (dir, stem) = editable::folder_of(&roots, &rel);
+        editable::save(&roots, &rel, &crate::makers::sound_source(&stem))?;
+        crate::makers::write_sound(&dir, &stem, &wav, s)?;
+        self.lib.start_scan(&roots);
+        self.ed.set_tool(crate::editor::Tool::Objects);
+        self.ed.object_type = Some(rel);
+        self.ed.toast(tr("Sound source made: click where it plays", "Источник звука создан: кликните, где он звучит"));
         Ok(())
     }
 

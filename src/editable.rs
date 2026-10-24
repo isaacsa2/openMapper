@@ -287,7 +287,7 @@ pub fn save_on(roots: &Roots, rel: &str, src: &Source, ground: Option<&dyn Fn(gl
         sco.push('\n');
     }
     std::fs::write(dir.join(format!("{stem}.sco")), omsi_cfg::encode_text(&sco.replace("\r\n", "\n").replace('\n', "\r\n")))?;
-    omsi_cfg::content_changed();
+    crate::hot::own_change();
     Ok(())
 }
 

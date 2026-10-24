@@ -106,7 +106,7 @@ pub fn variant(roots: &Roots, rel: &str, factor: DVec3) -> anyhow::Result<String
     }
     std::fs::create_dir_all(&out_dir)?;
     std::fs::write(&out_path, omsi_cfg::encode_text(&out.replace('\n', "\r\n")))?;
-    omsi_cfg::content_changed();
+    crate::hot::own_change();
     Ok(out_rel)
 }
 

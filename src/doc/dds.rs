@@ -6,10 +6,12 @@ pub fn alpha8(size: usize, texels: &[u8]) -> Vec<u8> {
     let w = |out: &mut Vec<u8>, v: u32| out.extend_from_slice(&v.to_le_bytes());
     out.extend_from_slice(b"DDS ");
     w(&mut out, 124); // header size
-    w(&mut out, 0x1 | 0x2 | 0x4 | 0x1000 | 0x8); // caps, height, width, pixelformat, pitch
+    // (byte for byte the header of the masks OMSI's editor writes: caps, height, width and
+    // pixel format flags, no pitch)
+    w(&mut out, 0x1 | 0x2 | 0x4 | 0x1000);
     w(&mut out, size as u32); // height
     w(&mut out, size as u32); // width
-    w(&mut out, size as u32); // pitch: one byte per texel
+    w(&mut out, 0); // pitch
     w(&mut out, 0); // depth
     w(&mut out, 0); // mip count
     for _ in 0..11 {
@@ -24,7 +26,7 @@ pub fn alpha8(size: usize, texels: &[u8]) -> Vec<u8> {
     w(&mut out, 0);
     w(&mut out, 0);
     w(&mut out, 0xff); // alpha mask
-    w(&mut out, 0x1000); // caps: texture
+    w(&mut out, 0x1000 | 0x2); // caps: texture, alpha
     for _ in 0..4 {
         w(&mut out, 0);
     }

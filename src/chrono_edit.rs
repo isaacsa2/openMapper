@@ -20,10 +20,10 @@ pub fn patch_text(t: &Tile) -> Option<String> {
     s.push_str("[version]\n14\n\n");
     // (its own ground and water, which lie beside it)
     if t.has_terrain {
-        s.push_str("[terrain]\n\n");
+        s.push_str("[terrain]\n\n\n");
     }
     if t.has_water {
-        s.push_str("[water]\n\n");
+        s.push_str("[water]\n\n\n");
     }
     if t.variable_terrain_lightmap {
         s.push_str("[variable_terrainlightmap]\n\n");

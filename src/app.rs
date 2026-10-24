@@ -79,6 +79,9 @@ pub struct App {
     roots: Option<Roots>,
     assets: Option<Assets>,
     lib: Library,
+    /// Watches the content folders: new and changed objects, splines and textures are read
+    /// again by themselves.
+    hot: Option<crate::hot::Watcher>,
     ed: Editor,
     /// Whether the selected object's type is openMapper's own (asked once per type).
     mesh_known: Option<(String, bool)>,
@@ -145,6 +148,7 @@ impl App {
             roots: None,
             assets: None,
             lib: Library::default(),
+            hot: None,
             mesh_known: None,
             hook_edit: None,
             pre_2d: None,
@@ -211,6 +215,8 @@ impl App {
         if let Some(g) = &mut self.gfx {
             g.renderer.roots = vec![roots.content.clone(), roots.omsi.clone()];
         }
+        // (not in the screenshot and check runs: nothing there waits for a change)
+        self.hot = if self.shot.is_none() { Some(crate::hot::Watcher::start(roots.content.clone(), roots.omsi.clone())) } else { None };
         self.roots = Some(roots);
     }
 
@@ -920,6 +926,56 @@ impl App {
         }
     }
 
+    /// A test drive in OMSI 2 itself: the saved map and the files made for it are copied into
+    /// the installation (asked once: the installation is otherwise never written to) and
+    /// OMSI 2 is started (on Windows; elsewhere it is only copied).
+    fn play_original(&mut self) {
+        let Some(root) = self.roots.as_ref().map(|r| r.omsi.clone()) else { return };
+        if self.ed.doc.is_none() {
+            return;
+        }
+        if !self.prefs.omsi2_copy_ok {
+            let yes = rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title("openMapper")
+                .set_buttons(rfd::MessageButtons::YesNo)
+                .set_description(format!(
+                    "{}\n\n{}",
+                    tr("To drive the map in OMSI 2 itself it has to be copied into the OMSI 2 folder (Maps, and the objects, roads and textures made for it). Nothing that is there is replaced except earlier copies of this map. Copy it there?", "Чтобы проехать карту в самом OMSI 2, её нужно скопировать в папку OMSI 2 (Maps, а также объекты, дороги и текстуры, сделанные для неё). Ничего из имеющегося не заменяется, кроме прежних копий этой карты. Копировать?"),
+                    root.display()
+                ))
+                .show();
+            if yes != rfd::MessageDialogResult::Yes {
+                return;
+            }
+            self.prefs.omsi2_copy_ok = true;
+            self.prefs.save();
+        }
+        if !self.save() {
+            return;
+        }
+        let (Some(roots), Some(doc)) = (&self.roots, &self.ed.doc) else { return };
+        let plan = crate::export::plan(doc, roots);
+        let folder = doc.dir.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+        match crate::export::install_into(&plan, &root) {
+            Ok((copied, same)) => {
+                log::info!("OMSI 2 test drive: {copied} files copied into {}, {same} already there", root.display());
+                match crate::install::omsi2_exe(&root) {
+                    Some(exe) if cfg!(windows) => {
+                        let mut cmd = std::process::Command::new(&exe);
+                        cmd.current_dir(&root);
+                        match cmd.spawn() {
+                            Ok(_) => self.ed.toast(format!("{} \"{folder}\"", tr("Starting OMSI 2: choose the map", "Запускаем OMSI 2: выберите карту"))),
+                            Err(e) => self.ed.error(format!("OMSI 2: {e}")),
+                        }
+                    }
+                    _ => self.ed.toast(format!("{} {}", tr("The map is copied into the OMSI 2 folder; OMSI 2 itself runs on Windows only:", "Карта скопирована в папку OMSI 2; сам OMSI 2 работает только в Windows:"), root.display())),
+                }
+            }
+            Err(e) => self.ed.error(format!("{}: {e}", tr("Could not copy the map into OMSI 2", "Не удалось скопировать карту в OMSI 2"))),
+        }
+    }
+
     /// Content files changed on disk: the catalogue, models and pictures are read again.
     /// The view in a season's textures: the models and the ground read again with them.
     fn set_season(&mut self, f: Option<&'static str>) {
@@ -1074,6 +1130,7 @@ impl App {
                 self.play(Vec::new());
                 self.guide.driven = true;
             }
+            Action::PlayOriginal => self.play_original(),
             Action::PlayHere(look) => {
                 let args = if look { self.view_args() } else { self.nearest_entry_args() };
                 if let Some(a) = args {
@@ -1568,6 +1625,11 @@ impl App {
             a.poll();
         }
         self.lib.poll();
+        if self.hot.as_ref().map(|h| h.poll()).unwrap_or(false) {
+            log::info!("content files changed on disk: reading them again");
+            self.reload_content();
+            self.ed.toast(tr("Files changed on disk: the catalogue and models are updated", "Файлы на диске изменились: каталог и модели обновлены"));
+        }
         // (the switches on offer, once the library is read)
         if !self.lib.scanning && self.ed.switch_catalogue.is_empty() && !self.lib.assets.is_empty() {
             self.ed.switch_catalogue = crate::switches::catalogue(&self.lib);
@@ -1977,11 +2039,14 @@ impl App {
                 let mut pass = pass.forget_lifetime();
                 g.egui_renderer.render(&mut pass, &prims, &sd);
             }
+            let t_submit = Instant::now();
+            g.gpu.queue.submit(extra.into_iter().chain([enc.finish()]));
+            // (freed only after the frame that may still draw them is submitted: a texture
+            // dropped by the interface in a frame it was drawn in is destroyed, and a draw
+            // of a destroyed texture is a fatal wgpu validation error)
             for id in &full.textures_delta.free {
                 g.egui_renderer.free_texture(id);
             }
-            let t_submit = Instant::now();
-            g.gpu.queue.submit(extra.into_iter().chain([enc.finish()]));
             g.renderer.profile.add("submit", crate::render::profile::ms(t_submit));
 
             g.renderer.profile.add("frame cpu", crate::render::profile::ms(now));

@@ -28,9 +28,9 @@ static SLOTS: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
 impl Slot {
     fn take() -> Slot {
         let (m, cv) = &SLOTS;
-        let mut n = m.lock().unwrap();
+        let mut n = m.lock().unwrap_or_else(|e| e.into_inner());
         while *n >= PARALLEL {
-            n = cv.wait(n).unwrap();
+            n = cv.wait(n).unwrap_or_else(|e| e.into_inner());
         }
         *n += 1;
         Slot
@@ -40,7 +40,10 @@ impl Slot {
 impl Drop for Slot {
     fn drop(&mut self) {
         let (m, cv) = &SLOTS;
-        *m.lock().unwrap() -= 1;
+        {
+            let mut n = m.lock().unwrap_or_else(|e| e.into_inner());
+            *n = n.saturating_sub(1);
+        }
         cv.notify_one();
     }
 }
@@ -153,8 +156,30 @@ pub fn tile(src: &Source, prefs: &GeoPrefs, z: u8, x: u32, y: u32) -> Result<Til
     }
 }
 
-/// GET a URL: (status, body, the answer's max-age).
+/// GET a URL: (status, body, the answer's max-age). A dropped connection, a timeout or a busy
+/// server (429, 5xx) is tried again twice, a little later each time.
 fn get(url: &str) -> Result<(u16, Vec<u8>, Option<u64>), Error> {
+    let mut last = None;
+    for attempt in 0..3u64 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(500 * attempt * attempt));
+        }
+        let got = get_once(url);
+        let retry = match &got {
+            Ok((status, _, _)) => matches!(*status, 429 | 500 | 502 | 503 | 504),
+            Err(_) => true,
+        };
+        if !retry {
+            return got;
+        }
+        log::debug!("download attempt {} failed: {}", attempt + 1, got.as_ref().map(|r| r.0.to_string()).unwrap_or_else(|e| e.clone()));
+        last = Some(got);
+    }
+    last.unwrap_or_else(|| Err("no answer".into()))
+}
+
+fn get_once(url: &str) -> Result<(u16, Vec<u8>, Option<u64>), Error> {
+    // (the slot is held for the one request only, not for the pause between tries)
     let _slot = Slot::take();
     let mut r = agent().get(url).call().map_err(net_error)?;
     let status = r.status().as_u16();
@@ -176,7 +201,7 @@ fn google_session(key: &str) -> Result<String, Error> {
     static SESSIONS: Mutex<Option<HashMap<u64, sources::GoogleSession>>> = Mutex::new(None);
     let h = fnv(key.as_bytes());
     let file = cache_root().join(sources::GOOGLE_SESSION_DIR).join(format!("{h:016x}.json"));
-    let mut lock = SESSIONS.lock().unwrap();
+    let mut lock = SESSIONS.lock().unwrap_or_else(|e| e.into_inner());
     let map = lock.get_or_insert_with(HashMap::new);
     let alive = |s: &sources::GoogleSession| s.expiry > now_secs() + 600;
     if let Some(s) = map.get(&h).filter(|s| alive(s)) {
@@ -268,7 +293,7 @@ pub struct Place {
 pub fn search(q: &str) -> Result<Vec<Place>, Error> {
     static LAST: Mutex<Option<Instant>> = Mutex::new(None);
     {
-        let mut last = LAST.lock().unwrap();
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(t) = *last {
             let wait = Duration::from_millis(1100).saturating_sub(t.elapsed());
             std::thread::sleep(wait);
