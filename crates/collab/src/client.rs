@@ -11,6 +11,8 @@ use crate::auth;
 
 /// The most a host's message may carry (a whole map when joining).
 const MAX_FROM_HOST: u64 = 4 << 30;
+/// A live update is bounded like an edit sent to the host; only joining takes a whole map.
+const MAX_UPDATE: u64 = 512 << 20;
 // A paused window or a slow connection must not grow queues without limit.
 const QUEUE: usize = 8;
 const CONNECT: Duration = Duration::from_secs(8);
@@ -102,7 +104,7 @@ impl Client {
         std::thread::Builder::new()
             .name("collab read".into())
             .spawn(move || loop {
-                match wire::read(&mut r, MAX_FROM_HOST) {
+                match wire::read(&mut r, MAX_UPDATE) {
                     Ok(Msg::Ping) => {}
                     Ok(m) => {
                         if tx.send(Event::Msg(m)).is_err() {

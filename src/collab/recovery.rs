@@ -24,6 +24,7 @@ pub fn keep(doc: &Document, parts: &[Part]) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     let saved: Vec<SavedPart> = parts.iter().map(|&part| SavedPart { part, data: super::sync::bytes_of(doc, part) }).collect();
     let bytes = serde_json::to_vec(&saved)?;
+    anyhow::ensure!(bytes.len() <= 512 << 20, "conflict recovery copy too large");
     loop {
         let n = SERIAL.fetch_add(1, Ordering::Relaxed);
         let path = dir.join(format!("{}-{}-{n}.json", crate::doc::safe::stamp(), std::process::id()));
