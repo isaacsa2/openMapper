@@ -50,7 +50,7 @@ impl Side {
 /// Ana hosts a two-tile map, Bruno joins it.
 fn session() -> (Host, Side, Side) {
     let mut doc = flat_map(2);
-    let cfg = HostConfig { bind: "127.0.0.1:0".parse().unwrap(), password: String::new(), map: MapInfo { folder: "T".into(), name: "T".into() }, next_id: doc.global.next_id_code, max_peers: 8 };
+    let cfg = HostConfig { bind: "127.0.0.1:0".parse().unwrap(), password: String::new(), open: true, work: 10, map: MapInfo { folder: "T".into(), name: "T".into() }, next_id: doc.global.next_id_code, max_peers: 8, ..Default::default() };
     let host = Host::start(cfg, all_states(&doc)).unwrap();
     let (client, w) = Client::connect(&host.addr().to_string(), "Ana", "", false).unwrap();
     let sync = Sync::new(&w.states, w.ids, true, &mut doc);
@@ -234,7 +234,7 @@ fn two_editors_through_the_session() {
     ana_ed.open(doc);
     // (opening reads the groups from the folder: given after)
     ana_ed.doc.as_mut().unwrap().groups.push(crate::mapgroups::MapGroup { name: "Stop".into(), ids: vec![100] });
-    let mut ana = super::Collab { name: "Ana".into(), port: 0, ..Default::default() };
+    let mut ana = super::Collab { name: "Ana".into(), port: 0, password: "long enough".into(), ..Default::default() };
     ana.lan = false;
     ana.host(&mut ana_ed);
     assert!(ana.error.is_none(), "{:?}", ana.error);
@@ -243,7 +243,7 @@ fn two_editors_through_the_session() {
     let port = ana.live().unwrap().hosting.as_ref().map(|h| h._host.addr().port()).unwrap();
 
     let mut bruno_ed = crate::editor::Editor::default();
-    let mut bruno = super::Collab { name: "Bruno".into(), address: format!("127.0.0.1:{port}"), ..Default::default() };
+    let mut bruno = super::Collab { name: "Bruno".into(), address: format!("127.0.0.1:{port}"), password: "long enough".into(), ..Default::default() };
     bruno.join();
     let until = Instant::now() + Duration::from_secs(10);
     let doc = loop {
@@ -302,4 +302,22 @@ fn two_editors_through_the_session() {
     ana.leave(&mut ana_ed);
     assert!(ana_ed.doc.as_ref().unwrap().global.next_id_code > placed);
     let _ = std::fs::remove_dir_all(&content);
+}
+
+#[test]
+fn hosting_without_a_password_only_when_chosen_and_never_on_the_internet() {
+    let mut ed = crate::editor::Editor::default();
+    let mut doc = flat_map(1);
+    doc.dir = std::env::temp_dir().join("openmapper-collab-open").join("maps").join("M");
+    ed.open(doc);
+    let mut c = super::Collab { name: "Ana".into(), port: 0, lan: false, ..Default::default() };
+    c.host(&mut ed);
+    assert!(c.live().is_none() && c.error.is_some(), "an empty password is not the default");
+    c.internet = true;
+    c.no_password = true;
+    c.host(&mut ed);
+    assert!(c.live().is_none(), "never without a password on the internet");
+    c.internet = false;
+    c.host(&mut ed);
+    assert!(c.live().is_some(), "{:?}", c.error);
 }

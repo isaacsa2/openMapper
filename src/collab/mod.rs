@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use openmapper_collab::gateway::{self, Gateway};
-use openmapper_collab::{Client, Event, Host, HostConfig, JoinError, MapInfo, Msg, Part, Peer, Presence, Refusal, Welcome, DEFAULT_PORT};
+use openmapper_collab::{Client, Event, Host, HostConfig, JoinError, MapInfo, Msg, Part, Peer, Presence, Refusal, Welcome, Why, DEFAULT_PORT};
 
 use crate::doc::{next_rev, Document};
 use crate::editor::Editor;
@@ -45,6 +45,11 @@ pub struct Collab {
     pub lan: bool,
     /// Others anywhere may join through a Cloudflare quick tunnel.
     pub internet: bool,
+    /// Hosting without a password was chosen and confirmed (never with `internet`; typing a
+    /// password undoes it).
+    pub no_password: bool,
+    /// The window asks whether to host without a password.
+    pub asking_no_password: bool,
     pub error: Option<String>,
     pub say: String,
     phase: Phase,
@@ -58,7 +63,7 @@ pub struct Collab {
 impl Default for Collab {
     fn default() -> Collab {
         let name = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default();
-        Collab { open: false, name: name.chars().take(32).collect(), address: String::new(), password: String::new(), port: DEFAULT_PORT, lan: true, internet: false, error: None, say: String::new(), phase: Phase::Off, joined: None, joined_groups: None }
+        Collab { open: false, name: name.chars().take(32).collect(), address: String::new(), password: String::new(), port: DEFAULT_PORT, lan: true, internet: false, no_password: false, asking_no_password: false, error: None, say: String::new(), phase: Phase::Off, joined: None, joined_groups: None }
     }
 }
 
@@ -138,12 +143,18 @@ impl Collab {
             self.error = Some(format!("{} {MIN_PASSWORD}", tr("A host on the internet needs a password of at least", "Хосту в интернете нужен пароль не короче")));
             return;
         }
+        // (no password only when chosen and confirmed, and never on the internet)
+        let open = self.password.is_empty() && self.no_password && !self.internet;
+        if self.password.is_empty() && !open {
+            self.error = Some(tr("Type a password, or choose explicitly to host without one", "Введите пароль или явно выберите открыть без пароля").into());
+            return;
+        }
         ed.history.commit();
         let _ = ed.history.take_changed();
         let ip: std::net::IpAddr = if self.lan { std::net::Ipv4Addr::UNSPECIFIED.into() } else { std::net::Ipv4Addr::LOCALHOST.into() };
         let folder = doc.dir.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
         let map = MapInfo { folder, name: doc.global.friendly_name.clone() };
-        let cfg = HostConfig { bind: (ip, self.port).into(), password: self.password.clone(), map, next_id: doc.global.next_id_code.max(1), max_peers: MAX_PEERS };
+        let cfg = HostConfig { bind: (ip, self.port).into(), password: self.password.clone(), open, map, next_id: doc.global.next_id_code.max(1), max_peers: MAX_PEERS, ..Default::default() };
         let host = match Host::start(cfg, sync::all_states(doc)) {
             Ok(h) => h,
             Err(e) => {
@@ -324,7 +335,14 @@ impl Collab {
         for n in notes {
             let name = |id: u32| l.peers.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_else(|| "?".into());
             match n {
-                Note::TurnedDown { tiles } => ed.error(format!("{} ({tiles} {})", tr("Somebody changed this first: your edit was put back", "Кто-то изменил это раньше: ваша правка отменена"), tr("tiles", "тайлов"))),
+                Note::TurnedDown { tiles, why } => {
+                    let what = match why {
+                        Why::Stale => tr("Somebody changed this first: your edit was put back", "Кто-то изменил это раньше: ваша правка отменена"),
+                        Why::TooMuch => tr("The host takes no more: the edit is too big, or the session holds as much as it may. Your edit was put back", "Хост больше не принимает: правка слишком большая или сессия заполнена. Ваша правка отменена"),
+                        Why::NotThere => tr("That lies too far from the map for this session: your edit was put back", "Это слишком далеко от карты для этой сессии: ваша правка отменена"),
+                    };
+                    ed.error(format!("{what} ({tiles} {})", tr("tiles", "тайлов")));
+                }
                 Note::Replaced { by, parts } => ed.toast(format!("{} {} ({parts})", name(by), tr("changed what you were editing: it is as they left it", "изменил(а) то, что вы правили: оставлено как у него/неё"))),
                 Note::HostOnly => ed.error(tr("The timetable, the traffic and the descriptions are the host's in multiplayer: your change was put back", "Расписание, трафик и описания в совместной правке — у хоста: ваша правка отменена")),
                 Note::Unreadable(p) => log::warn!("multiplayer: {p:?} could not be read, left as it was"),

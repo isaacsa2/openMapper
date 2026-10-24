@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use openmapper_collab::{Msg, Part, State};
+use openmapper_collab::{Msg, Part, State, Why};
 
 use super::codec;
 use crate::doc::Document;
@@ -19,8 +19,9 @@ use crate::history::{Changed, History};
 /// What the editor tells the person after a message.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Note {
-    /// An edit of theirs was turned down (`tiles` tiles put back as the host has them).
-    TurnedDown { tiles: usize },
+    /// An edit of theirs was turned down, and why (`tiles` tiles put back as the host has
+    /// them).
+    TurnedDown { tiles: usize, why: Why },
     /// Somebody's edit replaced changes of theirs not sent yet.
     Replaced { by: u32, parts: usize },
     /// A guest changed the timetable, the traffic or the descriptions: put back.
@@ -111,11 +112,11 @@ impl Sync {
                 }
                 self.put(states, doc, history, &mut notes);
             }
-            Msg::Rejected { seq, states } => {
+            Msg::Rejected { seq, why, states } => {
                 if self.flight.as_ref().map(|f| f.0) == Some(seq) {
                     self.flight = None;
                 }
-                notes.push(Note::TurnedDown { tiles: states.iter().filter(|s| matches!(s.part, Part::Tile(..))).count() });
+                notes.push(Note::TurnedDown { tiles: states.iter().filter(|s| matches!(s.part, Part::Tile(..))).count(), why });
                 self.put(states, doc, history, &mut notes);
             }
             Msg::Ids(a, b) => {

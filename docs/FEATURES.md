@@ -321,8 +321,10 @@ The complete list. A short overview is in the [README](../README.md).
   hosts the map open in their openMapper, the others join with an address: on the same network
   (`192.168.0.10:27560`, port 27560 by default) or from anywhere through a free Cloudflare quick
   tunnel (`https://….trycloudflare.com`, openOMSI's own: nothing to set up on the router;
-  `cloudflared` is fetched and checked the first time). A password is proved without being
-  sent; over the internet it is needed, of 8 letters or more.
+  `cloudflared` is fetched and checked the first time). A password is needed (hosting
+  without one only on the local network, chosen and confirmed) and proved without being sent;
+  over the internet it must have 8 letters or more. What to know before hosting, and a host's
+  limits: [COLLABORATION.md](COLLABORATION.md).
   * Shared as they are made: every tile (objects, roads and splines, ground, paint, water),
     the global settings and the tile list, and the groups. Each edit goes to the host with the
     versions of the tiles it changed; when somebody else changed one of them first, the edit
@@ -338,7 +340,8 @@ The complete list. A short overview is in the [README](../README.md).
   * Not shared yet: the timetable, the traffic and AI and the descriptions stay the host's (a
     guest's change of them is put back). The host saves the map; a guest's copy goes into
     `maps/<folder>_multiplayer`, saved once they leave. Everybody needs the same objects and
-    splines installed. On the LAN the connection is not encrypted (the tunnel is).
+    splines installed. On the LAN the connection is not encrypted (the tunnel is), and
+    everybody who joins can change the whole map.
 
 ## Controls
 

@@ -56,13 +56,41 @@ fn start(ui: &mut egui::Ui, c: &mut Collab, ed: &mut Editor) {
         ui.label(tr("Port", "Порт"));
         ui.add(egui::DragValue::new(&mut c.port).range(1024..=65535));
     });
+    // (no password: only when chosen here and confirmed, never on the internet; a password
+    // typed takes it back)
+    if !c.password.is_empty() || c.internet {
+        c.no_password = false;
+        c.asking_no_password = false;
+    }
     if c.internet && c.password.chars().count() < MIN_PASSWORD {
         ui.colored_label(WARN, format!("{} {MIN_PASSWORD}", tr("Over the internet the password must have at least this many letters:", "Для интернета пароль должен быть не короче, букв:")));
-    } else if c.lan && c.password.is_empty() {
-        ui.label(RichText::new(tr("Without a password anybody on this network may join.", "Без пароля подключиться может любой в этой сети.")).small().color(WARN));
+    } else if c.password.is_empty() && c.no_password {
+        ui.colored_label(WARN, tr("No password: anybody who reaches this computer's port can join and change the whole map.", "Без пароля: любой, кто достучится до порта этого компьютера, может подключиться и изменить всю карту."));
+        if ui.small_button(tr("Ask for a password after all", "Всё-таки спрашивать пароль")).clicked() {
+            c.no_password = false;
+        }
+    } else if c.password.is_empty() && c.asking_no_password {
+        ui.colored_label(WARN, tr("Host without a password? Anybody on this network who finds the port can join and change the whole map.", "Открыть без пароля? Любой в этой сети, кто найдёт порт, сможет подключиться и изменить всю карту."));
+        ui.horizontal(|ui| {
+            if ui.button(tr("Yes, without a password", "Да, без пароля")).clicked() {
+                c.no_password = true;
+                c.asking_no_password = false;
+            }
+            if ui.button(tr("No", "Нет")).clicked() {
+                c.asking_no_password = false;
+            }
+        });
+    } else if c.password.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(tr("Type a password the others will need.", "Введите пароль, который понадобится остальным.")).small().color(TEXT_DIM));
+            if ui.small_button(tr("Host without a password…", "Открыть без пароля…")).clicked() {
+                c.asking_no_password = true;
+            }
+        });
     }
-    let can_host = ed.doc.is_some() && !c.name.trim().is_empty() && (c.lan || c.internet);
-    if ui.add_enabled(can_host, egui::Button::new(icons::labelled(Icon::Play, tr("Host", "Стать хостом")))).on_disabled_hover_text(tr("Open a map and type a name first", "Сначала откройте карту и введите имя")).clicked() {
+    let password_ok = if c.internet { c.password.chars().count() >= MIN_PASSWORD } else { !c.password.is_empty() || c.no_password };
+    let can_host = ed.doc.is_some() && !c.name.trim().is_empty() && (c.lan || c.internet) && password_ok;
+    if ui.add_enabled(can_host, egui::Button::new(icons::labelled(Icon::Play, tr("Host", "Стать хостом")))).on_disabled_hover_text(tr("Open a map, type a name and a password first", "Сначала откройте карту, введите имя и пароль")).clicked() {
         c.host(ed);
     }
     ui.separator();
@@ -90,6 +118,10 @@ fn live(ui: &mut egui::Ui, c: &mut Collab, ed: &mut Editor) {
                 for (a, what) in &h.addrs {
                     copy_row(ui, a, what);
                 }
+                if !h.addrs.is_empty() {
+                    ui.label(RichText::new(tr("On this network the connection is not encrypted: somebody listening in can see the map, and from what they catch try passwords on their own computer. Use a long password, or the internet tunnel (encrypted).", "В локальной сети соединение не шифруется: тот, кто подслушивает, видит карту и по перехваченному может подбирать пароль на своём компьютере. Используйте длинный пароль или туннель через интернет (он шифруется).")).small().color(WARN));
+                }
+                ui.label(RichText::new(tr("Everybody who joins can change the whole map.", "Каждый подключившийся может изменить всю карту.")).small().color(TEXT_DIM));
                 match &*h.tunnel.lock().unwrap_or_else(|e| e.into_inner()) {
                     TunnelState::Off => {}
                     TunnelState::Starting => {
