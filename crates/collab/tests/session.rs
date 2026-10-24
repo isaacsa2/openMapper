@@ -3,12 +3,20 @@
 use std::time::{Duration, Instant};
 
 use openmapper_collab::client::Event;
-use openmapper_collab::{Client, Host, HostConfig, JoinError, MapInfo, Msg, Part, Presence, Refusal, State, ID_BLOCK};
+use openmapper_collab::{Client, Host, HostConfig, JoinError, MapInfo, Msg, Part, Presence, Refusal, State, Why, ID_BLOCK};
 
 fn host(password: &str, max_peers: usize) -> Host {
-    let cfg = HostConfig { bind: "127.0.0.1:0".parse().unwrap(), password: password.into(), map: MapInfo { folder: "Testmap".into(), name: "Test map".into() }, next_id: 500, max_peers };
+    // (an empty password: opened on purpose; little work, for the tests' speed)
+    let cfg = HostConfig { bind: "127.0.0.1:0".parse().unwrap(), password: password.into(), open: password.is_empty(), work: 10, map: MapInfo { folder: "Testmap".into(), name: "Test map".into() }, next_id: 500, max_peers, ..Default::default() };
     let states = vec![State { part: Part::Tile(0, 0), version: 0, data: Some(b"tile 0 0".to_vec()) }, State { part: Part::Global, version: 0, data: Some(b"global".to_vec()) }];
     Host::start(cfg, states).unwrap()
+}
+
+/// A hello for the challenge read from `r`, as a peer answers it.
+fn hello(r: &mut impl std::io::Read, name: &str, password: &str) -> Msg {
+    let Msg::Challenge { nonce, salt, work, .. } = openmapper_collab::wire::read(r, 0).unwrap() else { panic!() };
+    let proof = openmapper_collab::auth::proof(&openmapper_collab::auth::derive(password, &salt, work), &nonce);
+    Msg::Hello { protocol: openmapper_collab::PROTOCOL, name: name.into(), proof, fresh: true }
 }
 
 fn join(h: &Host, name: &str, password: &str) -> Result<(Client, openmapper_collab::Welcome), JoinError> {
@@ -65,7 +73,7 @@ fn an_edit_on_a_part_changed_meanwhile_is_turned_down() {
     // Bruno edited the tile as it was before Ana's edit came to him
     b.send(edit(7, Part::Tile(0, 0), 1, b"Bruno's"));
     let Msg::Applied { seq: None, .. } = next(&b) else { panic!() };
-    let Msg::Rejected { seq: 7, states } = next(&b) else { panic!() };
+    let Msg::Rejected { seq: 7, why: Why::Stale, states } = next(&b) else { panic!() };
     assert_eq!(states[0].data.as_deref(), Some(&b"Ana's"[..]));
     // and Ana never sees Bruno's
     std::thread::sleep(Duration::from_millis(100));
@@ -79,7 +87,7 @@ fn an_edit_is_taken_whole_or_not_at_all() {
     // a road over two tiles: one of them is new (never there: version 0), the other stale
     let m = Msg::Edit { seq: 2, base: vec![(Part::Tile(1, 0), 0), (Part::Tile(0, 0), 99)], states: vec![State { part: Part::Tile(1, 0), version: 0, data: Some(b"new".to_vec()) }, State { part: Part::Tile(0, 0), version: 0, data: Some(b"x".to_vec()) }] };
     a.send(m);
-    let Msg::Rejected { seq: 2, states } = next(&a) else { panic!() };
+    let Msg::Rejected { seq: 2, why: Why::Stale, states } = next(&a) else { panic!() };
     // (both parts as they are: the stale one, and the new one as never there)
     assert_eq!(states.len(), 2);
     assert_eq!((states[0].part, states[0].data.as_deref()), (Part::Tile(0, 0), Some(&b"tile 0 0"[..])));
@@ -204,8 +212,7 @@ fn a_peer_that_does_not_read_is_let_go() {
     // a peer that says hello and then reads nothing more
     let mut s = std::net::TcpStream::connect(h.addr()).unwrap();
     let mut r = std::io::BufReader::new(s.try_clone().unwrap());
-    let Msg::Challenge { nonce, .. } = openmapper_collab::wire::read(&mut r, 0).unwrap() else { panic!() };
-    let hello = Msg::Hello { protocol: openmapper_collab::PROTOCOL, name: "Slow".into(), proof: openmapper_collab::auth::proof(&nonce, ""), fresh: true };
+    let hello = hello(&mut r, "Slow", "");
     s.write_all(&openmapper_collab::wire::encode(&hello)).unwrap();
     // Ana's edits keep coming (bytes that do not pack, so the slow peer's socket fills); the
     // host must not wait for the slow one, it lets it go

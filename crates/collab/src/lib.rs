@@ -18,7 +18,7 @@ pub mod wire;
 
 pub use client::{Client, Event, JoinError, Welcome};
 pub use host::{Host, HostConfig};
-pub use wire::{MapInfo, Msg, Part, Peer, Presence, Refusal, State, PROTOCOL};
+pub use wire::{MapInfo, Msg, Part, Peer, Presence, Refusal, State, Why, PROTOCOL};
 
 /// The port a host listens on when none is given.
 pub const DEFAULT_PORT: u16 = 27_560;

@@ -79,14 +79,16 @@ impl Client {
         stream.set_nodelay(true).map_err(JoinError::Io)?;
         stream.set_read_timeout(Some(SILENCE)).map_err(JoinError::Io)?;
         let mut r = BufReader::new(stream.try_clone().map_err(JoinError::Io)?);
-        let nonce = match wire::read(&mut r, 0) {
+        let (nonce, salt, work) = match wire::read(&mut r, 0) {
             Ok(Msg::Challenge { protocol, .. }) if protocol != PROTOCOL => return Err(JoinError::Refused(Refusal::Protocol(protocol))),
-            Ok(Msg::Challenge { nonce, .. }) => nonce,
+            // (a host asking for more work than any would is not one to wait for)
+            Ok(Msg::Challenge { work, .. }) if work > auth::MAX_WORK => return Err(JoinError::NotAHost),
+            Ok(Msg::Challenge { nonce, salt, work, .. }) => (nonce, salt, work),
             Ok(_) => return Err(JoinError::NotAHost),
             Err(e) if e.kind() == io::ErrorKind::InvalidData => return Err(JoinError::NotAHost),
             Err(e) => return Err(JoinError::Io(e)),
         };
-        let hello = Msg::Hello { protocol: PROTOCOL, name: name.to_string(), proof: auth::proof(&nonce, password), fresh };
+        let hello = Msg::Hello { protocol: PROTOCOL, name: name.to_string(), proof: auth::proof(&auth::derive(password, &salt, work), &nonce), fresh };
         (&stream).write_all(&wire::encode(&hello)).map_err(JoinError::Io)?;
         let welcome = match wire::read(&mut r, MAX_FROM_HOST).map_err(JoinError::Io)? {
             Msg::Welcome { you, map, ids, peers, states } => Welcome { you, map, ids, peers, states },
