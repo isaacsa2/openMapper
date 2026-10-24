@@ -7,7 +7,7 @@ version from this file.
 ## Unreleased
 
 ### Added
-- **Multiplayer** (File > Multiplayer…): several people edit one map at once. One hosts the map open in their openMapper; the others join on the same network or from anywhere through a free Cloudflare quick tunnel (openOMSI's own). Tiles, the global settings and groups are shared as they are made; an edit made on a tile somebody else changed first is put back and its author told. Undo leaves the others' edits alone, and each editor hands out IDCodes of its own. The timetable, the traffic and the descriptions stay the host's for now, and the host saves the map.
+- **Multiplayer** (File > Multiplayer…): several people edit one map at once. One hosts the map open in their openMapper; the others join on the same network or from anywhere through a free Cloudflare quick tunnel (openOMSI's own). Tiles, the global settings and groups are shared as they are made; an edit made on a tile somebody else changed first is put back and its author told. Undo leaves the others' edits alone, and each editor hands out IDCodes of its own. The others' cursors, names and selections are drawn in the view in their colours. The timetable, the traffic and the descriptions stay the host's for now, and the host saves the map.
 
 ## 0.1.1 - 2026-10-23
 

@@ -1791,6 +1791,7 @@ impl App {
             crate::ui_edit::paint_box(&ctx, &self.ed);
             crate::ui_edit::paint_ruler(&ctx, &self.ed, &self.cam, self.view);
             crate::ui_edit::paint_cut(&ctx, &self.ed, &self.cam, self.view);
+            crate::collab::presence::paint(&ctx, &self.collab, &self.ed, &self.cam, self.view);
             crate::ui_menu::show(&ctx, &mut self.ui.view_menu, &mut self.ed, &self.lib, &mut actions);
             crate::ui_edit::road_entry(&ctx, &mut self.ed, self.view, &mut actions);
             if self.ed.doc.is_some() {
