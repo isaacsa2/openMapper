@@ -75,7 +75,9 @@ pub struct Instance {
 }
 
 /// Tints of what is selected and what is under the mouse.
-const SELECTED: [f32; 4] = [0.96, 0.50, 0.19, 0.45];
+// (the selection is not painted over what is selected: the editor draws a thin outline and
+// grips, so the thing stays visible)
+const SELECTED: [f32; 4] = [0.0; 4];
 const HOVERED: [f32; 4] = [1.0, 1.0, 1.0, 0.2];
 
 /// Surface codes of the depth pull (see mesh.wgsl).
@@ -184,9 +186,12 @@ struct GpuMesh {
 struct GpuTile {
     vb: wgpu::Buffer,
     uniform: wgpu::Buffer,
-    masks: [wgpu::Texture; 2],
-    /// Where the ground is cut away under roads (alpha 0), `CUT` texels a side.
-    cut: wgpu::Texture,
+    /// Its own paint masks, made when it has paint (else the shared blank one: a tile of
+    /// plain ground costs the GPU its terrain alone, so a map of thousands of tiles fits).
+    masks: Option<[wgpu::Texture; 2]>,
+    /// Where the ground is cut away under roads (alpha 0), `CUT` texels a side; its own only
+    /// while something is cut (else the shared uncut one).
+    cut: Option<wgpu::Texture>,
     cut_key: u64,
     bind: wgpu::BindGroup,
     terrain_rev: u64,
@@ -363,6 +368,10 @@ pub struct Renderer {
     terrain_index: wgpu::Buffer,
     terrain_index_count: u32,
     tiles: HashMap<TileKey, GpuTile>,
+    /// The tiles drawn when only a window of the map is loaded (None: all of them), and a
+    /// number that changes with the set.
+    live: Option<std::collections::HashSet<TileKey>>,
+    live_rev: u64,
     ground_bind: Option<wgpu::BindGroup>,
     ground_key: String,
     linear: wgpu::Sampler,
@@ -373,6 +382,8 @@ pub struct Renderer {
     flat_normal: wgpu::TextureView,
     default_orm: wgpu::TextureView,
     zero_mask: wgpu::TextureView,
+    /// Nothing cut from the ground (every texel opaque), for the tiles with no cut of their own.
+    uncut: wgpu::TextureView,
     textures: HashMap<PathBuf, GpuTexture>,
     materials: HashMap<MatKey, wgpu::BindGroup>,
     models: HashMap<String, Option<GpuModel>>,
@@ -801,6 +812,7 @@ impl Renderer {
         let flat_normal = solid_texture(device, queue, [128, 128, 255, 255], false);
         let default_orm = solid_texture(device, queue, [255, 200, 0, 255], false);
         let zero_mask = solid_texture(device, queue, [0, 0, 0, 0], false);
+        let uncut = solid_texture(device, queue, [255; 4], false);
         let tree_mesh = upload_mesh(device, &crate::assets::tree_mesh());
         let marker = upload_mesh(device, &marker_mesh());
         let thumb_depth = device
@@ -847,6 +859,8 @@ impl Renderer {
             terrain_index,
             terrain_index_count: idx.len() as u32,
             tiles: HashMap::new(),
+            live: None,
+            live_rev: 0,
             ground_bind: None,
             ground_key: String::new(),
             linear,
@@ -856,6 +870,7 @@ impl Renderer {
             flat_normal,
             default_orm,
             zero_mask,
+            uncut,
             textures: HashMap::new(),
             materials: HashMap::new(),
             models: HashMap::new(),
@@ -896,6 +911,23 @@ impl Renderer {
             quality,
             gpu_target: None,
         }
+    }
+
+    /// The graphics memory ran out: everything held on the GPU that is made again from the
+    /// document and the content when it is needed is let go (the ground, the roads, the models
+    /// and their textures), and the next frames build what is in view.
+    fn free_memory(&mut self) {
+        log::warn!("graphics memory ran out: letting go of the map's graphics ({} tiles, {} models, {} textures)", self.tiles.len(), self.models.len(), self.textures.len());
+        self.tiles.clear();
+        self.splines.clear();
+        self.chunks.clear();
+        self.builder.reset();
+        self.scene_key = 0;
+        self.tile_groups.clear();
+        self.textures.clear();
+        self.materials.clear();
+        self.models.clear();
+        self.anchored = false;
     }
 
     /// Forget the map (another one is opened).
@@ -1083,10 +1115,22 @@ impl Renderer {
         key
     }
 
+    /// Draw only these tiles (None: all). The others lose their graphics at once; they are
+    /// built again when they come back.
+    pub fn set_live(&mut self, live: Option<std::collections::HashSet<TileKey>>) {
+        if self.live != live {
+            self.live = live;
+            self.live_rev += 1;
+        }
+    }
+
     /// Bring the GPU copy of the map up to date with the document.
     pub fn sync(&mut self, gpu: &Gpu, doc: &Document, assets: &mut Assets, extras: &FrameExtras, cam: &Camera) {
         let device = &gpu.device;
         let queue = &gpu.queue;
+        if crate::gpu::take_out_of_memory() {
+            self.free_memory();
+        }
         // the map's anchor: a tile corner in its middle (everything on the GPU is relative to it)
         if self.anchor_for != doc.global_rev || !self.anchored {
             let keys: Vec<TileKey> = doc.tiles.keys().copied().collect();
@@ -1110,49 +1154,20 @@ impl Renderer {
         self.sync_ground(gpu, doc, assets);
         let mut t = std::time::Instant::now();
         // tiles
-        self.tiles.retain(|k, _| doc.tiles.contains_key(k));
-        let keys: Vec<TileKey> = doc.tiles.keys().copied().collect();
+        let live = self.live.clone();
+        let is_live = |k: &TileKey| live.as_ref().map(|l| l.contains(k)).unwrap_or(true);
+        self.tiles.retain(|k, _| doc.tiles.contains_key(k) && is_live(k));
+        let keys: Vec<TileKey> = doc.tiles.keys().copied().filter(|k| is_live(k)).collect();
         for k in keys {
             let t = &doc.tiles[&k];
             let need_new = !self.tiles.contains_key(&k);
             if need_new {
                 let vb = device.create_buffer(&wgpu::BufferDescriptor { label: Some("tile vb"), size: (TERRAIN_SAMPLES * TERRAIN_SAMPLES * std::mem::size_of::<TerrainVertex>()) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
                 let uniform = device.create_buffer(&wgpu::BufferDescriptor { label: Some("tile u"), size: std::mem::size_of::<TileUniform>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-                let mk = || {
-                    device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("mask"),
-                        size: wgpu::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    })
-                };
-                let masks = [mk(), mk()];
-                let cut = device.create_texture_with_data(
-                    queue,
-                    &wgpu::TextureDescriptor {
-                        label: Some("cut"),
-                        size: wgpu::Extent3d { width: CUT as u32, height: CUT as u32, depth_or_array_layers: 1 },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    },
-                    wgpu::util::TextureDataOrder::LayerMajor,
-                    &vec![255u8; CUT * CUT * 4],
-                );
-                let cv = cut.create_view(&Default::default());
-                let va = masks[0].create_view(&Default::default());
-                let vb2 = masks[1].create_view(&Default::default());
-                let views = [va, vb2, cv];
+                let views = [self.zero_mask.clone(), self.zero_mask.clone(), self.uncut.clone()];
                 let bind = tile_bind(device, &self.tile_layout, &uniform, &views, &self.mask_sampler, &self.imagery, k);
                 let imagery_rev = self.imagery.view(k).1;
-                self.tiles.insert(k, GpuTile { vb, uniform, masks, cut, cut_key: 0, bind, terrain_rev: 0, mask_rev: 0, walls: None, uniform_now: [f32::NAN; 8], views, imagery_rev, bbox: Aabb::ALL });
+                self.tiles.insert(k, GpuTile { vb, uniform, masks: None, cut: None, cut_key: 0, bind, terrain_rev: 0, mask_rev: 0, walls: None, uniform_now: [f32::NAN; 8], views, imagery_rev, bbox: Aabb::ALL });
             }
             let gt = self.tiles.get_mut(&k).unwrap();
             if gt.imagery_rev != self.imagery.view(k).1 {
@@ -1177,24 +1192,53 @@ impl Renderer {
             }
             if gt.mask_rev != t.mask_rev {
                 gt.mask_rev = t.mask_rev;
-                for (half, tex) in gt.masks.iter().enumerate() {
-                    let mut data = vec![0u8; 256 * 256 * 4];
-                    for ch in 0..4 {
-                        let layer = 1 + half * 4 + ch;
-                        let (Some(Some(m)), Some(g)) = (t.masks.get(layer), doc.global.ground_textures.get(layer)) else { continue };
-                        let size = crate::doc::mask_size(g);
-                        for y in 0..256 {
-                            for x in 0..256 {
-                                data[(y * 256 + x) * 4 + ch] = m[(y * size / 256) * size + x * size / 256];
+                let painted = (1..9).any(|layer| matches!(t.masks.get(layer), Some(Some(_))) && doc.global.ground_textures.get(layer).is_some());
+                if !painted {
+                    // (no paint: the shared blank mask)
+                    if gt.masks.take().is_some() {
+                        gt.views[0] = self.zero_mask.clone();
+                        gt.views[1] = self.zero_mask.clone();
+                        gt.bind = tile_bind(device, &self.tile_layout, &gt.uniform, &gt.views, &self.mask_sampler, &self.imagery, k);
+                    }
+                } else {
+                    if gt.masks.is_none() {
+                        let mk = || {
+                            device.create_texture(&wgpu::TextureDescriptor {
+                                label: Some("mask"),
+                                size: wgpu::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 },
+                                mip_level_count: 1,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format: wgpu::TextureFormat::Rgba8Unorm,
+                                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                                view_formats: &[],
+                            })
+                        };
+                        let masks = [mk(), mk()];
+                        gt.views[0] = masks[0].create_view(&Default::default());
+                        gt.views[1] = masks[1].create_view(&Default::default());
+                        gt.masks = Some(masks);
+                        gt.bind = tile_bind(device, &self.tile_layout, &gt.uniform, &gt.views, &self.mask_sampler, &self.imagery, k);
+                    }
+                    for (half, tex) in gt.masks.as_ref().unwrap().iter().enumerate() {
+                        let mut data = vec![0u8; 256 * 256 * 4];
+                        for ch in 0..4 {
+                            let layer = 1 + half * 4 + ch;
+                            let (Some(Some(m)), Some(g)) = (t.masks.get(layer), doc.global.ground_textures.get(layer)) else { continue };
+                            let size = crate::doc::mask_size(g);
+                            for y in 0..256 {
+                                for x in 0..256 {
+                                    data[(y * 256 + x) * 4 + ch] = m[(y * size / 256) * size + x * size / 256];
+                                }
                             }
                         }
+                        queue.write_texture(
+                            wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                            &data,
+                            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256 * 4), rows_per_image: Some(256) },
+                            wgpu::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 },
+                        );
                     }
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                        &data,
-                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256 * 4), rows_per_image: Some(256) },
-                        wgpu::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 },
-                    );
                 }
             }
         }
@@ -1202,8 +1246,8 @@ impl Renderer {
         self.profile.add("sync.tiles", profile::ms(t));
         t = std::time::Instant::now();
         // every tile as the game shows it (chrono patches laid over)
-        self.display.retain(|k, _| doc.tiles.contains_key(k));
-        for (k, t) in &doc.tiles {
+        self.display.retain(|k, _| doc.tiles.contains_key(k) && is_live(k));
+        for (k, t) in doc.tiles.iter().filter(|(k, _)| is_live(k)) {
             if self.display.get(k).map(|d| d.0 != t.content_rev).unwrap_or(true) {
                 self.display.insert(*k, (t.content_rev, Arc::new(t.display(k.1).into_owned())));
             }
@@ -1218,7 +1262,8 @@ impl Renderer {
             self.assets_seen_at = std::time::Instant::now();
             self.asset_epoch += 1;
         }
-        let mut key_parts: Vec<u64> = doc.tiles.values().flat_map(|t| [t.content_rev, t.terrain_rev]).collect();
+        let mut key_parts: Vec<u64> = doc.tiles.iter().filter(|(k, _)| is_live(k)).flat_map(|(_, t)| [t.content_rev, t.terrain_rev]).collect();
+        key_parts.push(self.live_rev);
         key_parts.push(extras.show_technical as u64);
         key_parts.extend(extras.hide.map(|h| h as u64));
         self.hide_splines = extras.hide[2];
@@ -1227,7 +1272,7 @@ impl Renderer {
         if key != self.scene_key {
             self.scene_key = key;
             // each tile's instances are kept, and made again only when it changed
-            self.tile_groups.retain(|k, _| doc.tiles.contains_key(k));
+            self.tile_groups.retain(|k, _| doc.tiles.contains_key(k) && is_live(k));
             for (k, t) in &disp {
                 let Some(td) = doc.tiles.get(k) else { continue };
                 let tkey = hash_of(&[td.content_rev, td.terrain_rev, extras.show_technical as u64, self.asset_epoch, extras.hide[0] as u64, extras.hide[1] as u64]);
@@ -1415,7 +1460,7 @@ impl Renderer {
         // each tile's water: one quad at its four corner heights, blended over the ground
         // (an ordinary instance, not a surface: openOMSI's reason, the banks must win)
         let water_tex = ["texture/water.tga", "Texture/water.tga"].iter().map(|r| doc.dir.join(r)).chain(doc.source.iter().map(|s| s.join("texture").join("water.tga"))).find(|p| p.is_file());
-        for (k, td) in &doc.tiles {
+        for (k, td) in doc.tiles.iter().filter(|(k, _)| is_live(k)) {
             let Some(w) = td.water else { continue };
             let key = (*k, WATER);
             alive.push(key);
@@ -1668,8 +1713,32 @@ impl Renderer {
                 (vb, ib, m.indices.len() as u32)
             });
             g.cut_key = h;
+            // (nothing cut: the shared uncut ground; a texture of its own only where roads
+            // or plates take the ground away)
+            if cut.rgba.iter().all(|&b| b == 255) {
+                if g.cut.take().is_some() {
+                    g.views[2] = self.uncut.clone();
+                    g.bind = tile_bind(&gpu.device, &self.tile_layout, &g.uniform, &g.views, &self.mask_sampler, &self.imagery, key);
+                }
+                continue;
+            }
+            if g.cut.is_none() {
+                let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("cut"),
+                    size: wgpu::Extent3d { width: CUT as u32, height: CUT as u32, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                g.views[2] = tex.create_view(&Default::default());
+                g.cut = Some(tex);
+                g.bind = tile_bind(&gpu.device, &self.tile_layout, &g.uniform, &g.views, &self.mask_sampler, &self.imagery, key);
+            }
             gpu.queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture: &g.cut, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo { texture: g.cut.as_ref().unwrap(), mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 &cut.rgba,
                 wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * CUT as u32), rows_per_image: Some(CUT as u32) },
                 wgpu::Extent3d { width: CUT as u32, height: CUT as u32, depth_or_array_layers: 1 },

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check embedded catalogues against literal tr() and command-palette labels."""
+"""Check intentionally partial Portuguese locale catalogues against Rust source strings."""
 import json
 import re
 from pathlib import Path
@@ -7,19 +7,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PAIR = re.compile(r'\b(?:tr\(\s*|cmd!\(\s*Icon::\w+\s*,\s*)("(?:[^"\\]|\\.)*")\s*,\s*("(?:[^"\\]|\\.)*")', re.S)
 source = set()
-for path in (ROOT / 'src').rglob('*.rs'):
-    for match in PAIR.finditer(path.read_text()):
+for path in (ROOT / "src").rglob("*.rs"):
+    for match in PAIR.finditer(path.read_text(encoding="utf-8")):
         source.add(json.loads(match[1]))
-for language in ('en', 'ru', 'pt-BR', 'pt-PT', 'de'):
-    entries = json.loads((ROOT / 'locales' / (language + '.json')).read_text())
-    missing = source - entries.keys()
-    extra = entries.keys() - source
-    assert not missing and not extra, (language, 'missing', sorted(missing), 'obsolete', sorted(extra))
+catalogues = {}
+for language in ("pt-BR", "pt-PT"):
+    entries = json.loads((ROOT / "locales" / (language + ".json")).read_text(encoding="utf-8"))
+    assert isinstance(entries, dict)
+    obsolete = entries.keys() - source
+    assert not obsolete, (language, "obsolete source keys", sorted(obsolete))
     for key, value in entries.items():
-        assert value.strip(), (language, 'empty', key)
-        if language == 'ru':
-            continue  # Context-specific Russian text stays inline in tr().
+        assert isinstance(value, str) and value.strip(), (language, "empty", key)
+        assert "▁" not in value, (language, "tokenisation marker", key)
         for token in re.findall(r'\{[^{}]*\}|\bOPENMAPPER_[A-Z_]+\b|https?://\S+', key):
-            assert token in value, (language, 'changed literal', token, key)
-        assert '▁' not in value, (language, 'tokenisation marker', key)
-    print(f'{language}: {len(entries)} source labels covered')
+            assert token in value, (language, "changed protected literal", token, key)
+    catalogues[language] = entries
+    print(f"{language}: {len(entries)} corrected-subset entries, {len(source) - len(entries)} English fallbacks")
+assert catalogues["pt-BR"].keys() == catalogues["pt-PT"].keys()
+for key in ("Save", "File", "View", "Help", "Language", "Roads", "Objects", "Tiles"):
+    assert key in source, ("core label no longer in source", key)
+    for language, entries in catalogues.items():
+        assert key in entries, (language, "missing core label", key)
+assert catalogues["pt-BR"]["Save"] == "Salvar"
+assert catalogues["pt-PT"]["Save"] == "Guardar"
+print("Portuguese catalogue checks: OK")

@@ -1,7 +1,7 @@
 //! Saving without losing anything: every file goes to a temporary name first and is renamed
-//! over the old one only when all of them were written (a full disk or a crash leaves the
-//! map as it was), and the files a save replaces or removes are kept in a backup of that
-//! save, the last few of them, so a save can be taken back.
+//! over the old one only when all of them were written. Failed installations roll back;
+//! regular backups keep the files replaced or removed so a save can also be taken back
+//! after a process crash. This is not a crash-atomic multi-file transaction.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -45,44 +45,10 @@ pub fn write_atomic(p: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Carry the operations out: first every new file under its temporary name (on an error
-/// they go again and nothing was changed), then all are renamed into place and the
-/// removed ones taken away.
+/// Prepare every file, then install them. A filesystem error rolls back the files
+/// already replaced or removed; backups remain the recovery path after a process crash.
 pub fn commit(ops: &[Op]) -> anyhow::Result<()> {
-    let mut written: Vec<PathBuf> = Vec::new();
-    for op in ops {
-        if let Op::Write(p, bytes) = op {
-            if let Some(d) = p.parent() {
-                std::fs::create_dir_all(d)?;
-            }
-            let tmp = temp_of(p);
-            if let Err(e) = write_synced(&tmp, bytes) {
-                let _ = std::fs::remove_file(&tmp);
-                for t in &written {
-                    let _ = std::fs::remove_file(t);
-                }
-                anyhow::bail!("{}: {e} ({})", p.display(), crate::i18n::tr("nothing was changed", "ничего не изменено"));
-            }
-            written.push(tmp);
-        }
-    }
-    let mut failed = Vec::new();
-    for op in ops {
-        let r = match op {
-            Op::Write(p, _) => std::fs::rename(temp_of(p), p),
-            Op::Remove(p) => match std::fs::remove_file(p) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                r => r,
-            },
-        };
-        if let Err(e) = r {
-            failed.push(format!("{}: {e}", op.path().display()));
-        }
-    }
-    if !failed.is_empty() {
-        anyhow::bail!("{}", failed.join("; "));
-    }
-    Ok(())
+    super::transaction::commit(ops)
 }
 
 /// `rel` (backslashes or slashes) inside `dir` itself, whatever the case of its parts; parts
@@ -324,7 +290,7 @@ mod tests {
         let map = root.join("maps").join("M");
         std::fs::write(map.join("a.map"), "old").unwrap();
         // (a folder where a file should go: it cannot be written)
-        std::fs::create_dir_all(map.join(".z.map.openmapper-new")).unwrap();
+        std::fs::create_dir_all(map.join("z.map")).unwrap();
         let ops = vec![Op::Write(map.join("a.map"), b"new".to_vec()), Op::Write(map.join("z.map"), b"z".to_vec())];
         assert!(commit(&ops).is_err());
         assert_eq!(std::fs::read_to_string(map.join("a.map")).unwrap(), "old");

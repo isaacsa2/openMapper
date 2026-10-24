@@ -54,6 +54,11 @@ struct Mouse {
     grab_anchor: Option<DVec3>,
     over_ui: bool,
     moved: bool,
+    /// The cursor is held and hidden while the right button looks round, and the turn comes
+    /// from the mouse's own motion (not from where the cursor is, which jumps at the screen's edge).
+    look_raw: bool,
+    /// The mouse's motion since the last frame, applied once there.
+    look_acc: (f64, f64),
 }
 
 #[derive(Default)]
@@ -92,6 +97,12 @@ pub struct App {
     /// A cursor held on the ground for a picture (OPENMAPPER_KNIFE), whatever the mouse does.
     pinned_cursor: Option<DVec3>,
     cam: Camera,
+    /// The place the loaded window of tiles is round (tile streaming on).
+    stream_at: Option<DVec2>,
+    /// When the last input came: a window nobody touches redraws slower.
+    last_input: Instant,
+    /// The tiles loaded now, and what they were made from.
+    stream_set: Option<(Option<std::collections::HashSet<crate::doc::TileKey>>, (usize, u64, u64))>,
     ui: UiState,
     mouse: Mouse,
     keys: Keys,
@@ -129,6 +140,8 @@ pub struct App {
     gamecheck: crate::gamecheck::GameCheck,
     /// Getting started.
     guide: crate::ui_guide::Guide,
+    /// File > Multiplayer: the session, when there is one.
+    collab: crate::collab::Collab,
     updater: crate::updater::Updater,
     /// A full-size picture of the view is taken this frame (View menu, F12).
     snapshot: bool,
@@ -155,6 +168,9 @@ impl App {
             ed: Editor::default(),
             pinned_cursor: None,
             cam: Camera::default(),
+            stream_at: None,
+            last_input: Instant::now(),
+            stream_set: None,
             ui: UiState::default(),
             mouse: Mouse::default(),
             keys: Keys::default(),
@@ -179,6 +195,7 @@ impl App {
             trace: Default::default(),
             gamecheck: Default::default(),
             guide: Default::default(),
+            collab: Default::default(),
             updater: crate::updater::Updater::new(),
             snapshot: false,
             snapshot_done: false,
@@ -192,6 +209,8 @@ impl App {
         if std::env::var_os("OPENMAPPER_NEWMAP").is_some() {
             app.ui.new_map = Some(Default::default());
         }
+        // OPENMAPPER_MULTIPLAYER: File > Multiplayer open at the start
+        app.collab.open = std::env::var_os("OPENMAPPER_MULTIPLAYER").is_some();
         app
     }
 
@@ -279,6 +298,41 @@ impl App {
         }
     }
 
+    /// Once, the first time a map is opened with this version: load the map 100 tiles at a
+    /// time, as OMSI 2's editor does, or all of it (the default).
+    fn ask_tile_streaming(&mut self) {
+        if self.prefs.tile_streaming.is_some() || self.shot.is_some() || std::env::var_os("OPENMAPPER_SHOT").is_some() {
+            return;
+        }
+        let yes = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Info)
+            .set_title("openMapper")
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .set_description(tr(
+                "Load a big map 100 tiles at a time, as OMSI 2's own editor does?\n\nOnly the 100 tiles round the camera are kept in graphics memory; the others are hidden until you click on the empty zone, where the next 100 are loaded. It keeps very big maps light. You can change it any time in View > Load 100 tiles at a time.",
+                "Загружать большую карту по 100 тайлов, как в редакторе OMSI 2?\n\nВ графической памяти остаются только 100 тайлов вокруг камеры, остальные скрыты, пока вы не кликнете по пустой зоне: там загрузятся следующие 100. Это сильно облегчает очень большие карты. Можно изменить в любой момент: Вид > Загружать по 100 тайлов.",
+            ))
+            .show();
+        self.prefs.tile_streaming = Some(yes == rfd::MessageDialogResult::Yes);
+        self.prefs.save();
+    }
+
+    /// With tile streaming on, a click on ground whose tile is not loaded loads the 100 tiles
+    /// round that place instead (and is not a click on the map).
+    fn stream_click(&mut self) -> bool {
+        let Some(doc) = &self.ed.doc else { return false };
+        let Some((Some(set), _)) = &self.stream_set else { return false };
+        let Some(p) = self.grab_point() else { return false };
+        let at = DVec2::new(p.x, p.y);
+        let k = crate::doc::tile_of(at);
+        if set.contains(&k) || !doc.tiles.contains_key(&k) {
+            return false;
+        }
+        self.stream_at = Some(at);
+        self.ed.toast(tr("The next 100 tiles are loaded, the others are hidden", "Загружены следующие 100 тайлов, остальные скрыты").to_string());
+        true
+    }
+
     fn after_open(&mut self, doc: Document) {
         self.remember_view();
         // look at the map's middle (or its editor camera)
@@ -321,6 +375,10 @@ impl App {
         }
         self.ed.open(doc);
         self.ed.set_tool(Tool::Select);
+        // (the loaded window of tiles starts round where the map opened)
+        self.stream_at = None;
+        self.stream_set = None;
+        self.ask_tile_streaming();
         // OPENMAPPER_CAM=x,y,distance,yaw,pitch (checks without a person at the screen)
         if let Some(v) = std::env::var("OPENMAPPER_CAM").ok().map(|c| c.split(',').filter_map(|x| x.trim().parse::<f64>().ok()).collect::<Vec<_>>()).filter(|v| v.len() == 5) {
             let h = self.ed.doc.as_ref().map(|d| d.ground(DVec2::new(v[0], v[1]))).unwrap_or(0.0);
@@ -801,6 +859,10 @@ impl App {
     }
 
     fn save(&mut self) -> bool {
+        if self.collab.is_guest() {
+            self.ed.error(tr("In multiplayer the host saves the map. Leave the session to save this as a copy of your own.", "В совместной правке карту сохраняет хост. Выйдите из сессии, чтобы сохранить копию для себя."));
+            return false;
+        }
         // (a scenario's things being edited on the map are not the map's)
         self.chrono.end_session(&mut self.ed);
         let Some(doc) = self.ed.doc.as_mut() else { return false };
@@ -1299,6 +1361,13 @@ impl App {
                 self.reload_content();
                 self.ed.toast(msg);
             }
+            Action::SetTileStreaming(on) => {
+                self.prefs.tile_streaming = Some(on);
+                self.prefs.save();
+                self.stream_at = None;
+                self.stream_set = None;
+                self.ed.toast(if on { tr("Only 100 tiles round the camera are loaded; click on the empty zone to load the next 100", "Загружены только 100 тайлов вокруг камеры; клик по пустой зоне загрузит следующие 100") } else { tr("All tiles are loaded", "Загружены все тайлы") }.to_string());
+            }
             Action::SetCamera(c) => {
                 self.prefs.camera = c;
                 self.prefs.save();
@@ -1348,6 +1417,7 @@ impl App {
             Action::Trace => self.trace.open = !self.trace.open,
             Action::GameCheck => self.game_check(),
             Action::Guide => self.guide.open = !self.guide.open,
+            Action::Multiplayer => self.collab.open = !self.collab.open,
             Action::Updates => self.updater.window = true,
             Action::Export => self.export(),
             Action::ToggleFavourite(rel) => {
@@ -1625,6 +1695,11 @@ impl App {
             a.poll();
         }
         self.lib.poll();
+        self.collab.tick(&mut self.ed, self.roots.as_ref());
+        if let Some(doc) = self.collab.take_joined() {
+            self.after_open(doc);
+            self.collab.joined_open(&mut self.ed);
+        }
         if self.hot.as_ref().map(|h| h.poll()).unwrap_or(false) {
             log::info!("content files changed on disk: reading them again");
             self.reload_content();
@@ -1635,6 +1710,14 @@ impl App {
             self.ed.switch_catalogue = crate::switches::catalogue(&self.lib);
         }
         // camera
+        // (looking round: all the mouse moved since the last frame, turned at once)
+        if self.mouse.look_raw {
+            let (dx, dy) = std::mem::take(&mut self.mouse.look_acc);
+            if dx != 0.0 || dy != 0.0 {
+                self.cam.look_pixels((dx.clamp(-400.0, 400.0) * 0.8) as f32, (dy.clamp(-400.0, 400.0) * 0.8) as f32);
+                self.mouse.right_moved += (dx.abs() + dy.abs()) as f32;
+            }
+        }
         let fwd = (self.keys.w as i32 - self.keys.s as i32) as f64;
         let side = (self.keys.d as i32 - self.keys.a as i32) as f64;
         let turn = (self.keys.e as i32 - self.keys.q as i32) as f64;
@@ -1649,8 +1732,8 @@ impl App {
             if m_fwd != 0.0 || m_side != 0.0 {
                 self.cam.drive(m_fwd, m_side, 0.0, self.keys.shift, dt);
             }
-        } else if keys_on && self.fly_style() {
-            // Unity: W A S D / Q E fly only while the right button is held; the arrows move
+        } else if keys_on && (self.fly_style() || self.mouse.right) {
+            // W A S D / Q E fly only while the right button is held (Q down, E up); the arrows move
             if self.mouse.right && (fwd != 0.0 || side != 0.0 || turn != 0.0) {
                 self.keys.fly_held += dt;
                 self.cam.fly(fwd, side, turn, self.keys.shift, dt, self.keys.fly_held);
@@ -1838,6 +1921,7 @@ impl App {
             crate::ui_edit::paint_box(&ctx, &self.ed);
             crate::ui_edit::paint_ruler(&ctx, &self.ed, &self.cam, self.view);
             crate::ui_edit::paint_cut(&ctx, &self.ed, &self.cam, self.view);
+            crate::collab::presence::paint(&ctx, &self.collab, &self.ed, &self.cam, self.view);
             crate::ui_menu::show(&ctx, &mut self.ui.view_menu, &mut self.ed, &self.lib, &mut actions);
             crate::ui_edit::road_entry(&ctx, &mut self.ed, self.view, &mut actions);
             if self.ed.doc.is_some() {
@@ -1881,6 +1965,7 @@ impl App {
                 guide = self.guide.window(&ctx, &self.ed, &self.lib, &self.prefs, self.game.is_some(), self.ui.check.errors_left() == Some(0));
             }
             crate::ui_uv::window(&ctx, &mut self.ui.uv, &mut self.ui.uv_open, &mut self.ed, self.roots.as_ref());
+            crate::ui_collab::window(&ctx, &mut self.collab, &mut self.ed);
             crate::ui_newmap::dialog(&ctx, &mut self.ui.new_map, self.roots.as_ref(), &self.texture_files, &self.swatches, &mut wanted_swatches, &mut actions);
             ui::confirm_unsaved(&ctx, &mut self.ui, &mut actions);
             if let Some(m) = &self.recover {
@@ -1996,6 +2081,10 @@ impl App {
                 g.renderer.profile.add("extras", crate::render::profile::ms(t_x));
                 self.geo.feed(&mut g.renderer.imagery, &g.gpu, &self.ed);
                 g.renderer.daytime = self.ui.daytime.map(|h| crate::render::daylight::at_map(h, &doc.traffic.timezone));
+                if let Some((set, stamp)) = stream_window(doc, self.prefs.tile_streaming == Some(true), &mut self.stream_at, &self.cam, self.stream_set.as_ref().map(|s| s.1)) {
+                    g.renderer.set_live(set.clone());
+                    self.stream_set = Some((set, stamp));
+                }
                 g.renderer.sync(&g.gpu, doc, assets, &extras, &self.cam);
                 let ppp = full.pixels_per_point;
                 let (w, h) = (g.gpu.config.width as f32, g.gpu.config.height as f32);
@@ -2576,6 +2665,9 @@ impl ApplicationHandler for App {
         if self.shot.is_some() && matches!(event, WindowEvent::KeyboardInput { .. } | WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } | WindowEvent::CursorMoved { .. } | WindowEvent::Ime(_)) {
             return;
         }
+        if !matches!(event, WindowEvent::RedrawRequested | WindowEvent::Occluded(_)) {
+            self.last_input = Instant::now();
+        }
         let resp = g.egui_state.on_window_event(&g.window, &event);
         let scale = g.window.scale_factor() as f32;
         match event {
@@ -2638,18 +2730,16 @@ impl ApplicationHandler for App {
                         self.cam.pan_screen(dx, dy, h);
                     } else if unity && self.keys.alt {
                         self.cam.dolly((dx - dy) * 0.02);
-                    } else if unity {
+                    } else if !self.mouse.look_raw {
                         self.cam.look_pixels(dx, dy);
-                    } else {
-                        self.cam.orbit_pixels(-dx, dy);
                     }
                     self.mouse.right_moved += dx.abs() + dy.abs();
                 } else if self.mouse.alt_orbit {
                     self.cam.orbit_pixels(if unity { dx } else { -dx }, dy);
                 }
-                if self.mouse.middle && unity {
+                if self.mouse.middle {
                     self.cam.pan_screen(dx, dy, h);
-                } else if self.mouse.middle || self.mouse.grab {
+                } else if self.mouse.grab {
                     match (self.mouse.grab_anchor, self.view_ray()) {
                         (Some(a), Some((o, d))) => self.cam.grab(a, o, d),
                         _ => self.cam.pan_pixels(dx, dy, h),
@@ -2664,7 +2754,9 @@ impl ApplicationHandler for App {
                 let over_ui = self.mouse.over_ui;
                 match button {
                     MouseButton::Left => {
-                        if pressed && !over_ui {
+                        if pressed && !over_ui && self.prefs.tile_streaming == Some(true) && !self.keys.alt && self.stream_click() {
+                            // (loaded another window of tiles)
+                        } else if pressed && !over_ui {
                             // (a handle of the Move / Rotate / Scale gizmo is taken, wherever it is)
                             let on_gizmo = self.ed.gizmo_under_cursor();
                             if self.keys.alt {
@@ -2730,13 +2822,22 @@ impl ApplicationHandler for App {
                         if pressed && !over_ui {
                             self.mouse.right = true;
                             self.mouse.right_moved = 0.0;
-                            if !self.fly_style() {
-                                if let Some(c) = self.grab_point() {
-                                    self.cam.set_pivot(c);
+                            self.mouse.look_acc = (0.0, 0.0);
+                            if !self.ui.view_2d && !self.keys.alt {
+                                let ok = g.window.set_cursor_grab(winit::window::CursorGrabMode::Locked).or_else(|_| g.window.set_cursor_grab(winit::window::CursorGrabMode::Confined)).is_ok();
+                                if ok {
+                                    g.window.set_cursor_visible(false);
                                 }
+                                self.mouse.look_raw = ok;
                             }
                         } else if !pressed && self.mouse.right {
                             self.mouse.right = false;
+                            if self.mouse.look_raw {
+                                self.mouse.look_raw = false;
+                                let _ = g.window.set_cursor_grab(winit::window::CursorGrabMode::None);
+                                g.window.set_cursor_visible(true);
+                                let _ = g.window.set_cursor_position(winit::dpi::LogicalPosition::new(self.mouse.pos.0 as f64, self.mouse.pos.1 as f64));
+                            }
                             if self.mouse.right_moved < 5.0 && self.ed.right_click() {
                                 self.ui.view_menu = Some(crate::ui_menu::ViewMenu { at: egui::pos2(self.mouse.pos.0, self.mouse.pos.1), ground: self.ed.cursor });
                             }
@@ -2766,7 +2867,7 @@ impl ApplicationHandler for App {
                 }
                 let steps = match delta {
                     // (flying: the wheel sets the speed)
-                    MouseScrollDelta::LineDelta(_, y) if self.mouse.right && self.fly_style() => {
+                    MouseScrollDelta::LineDelta(_, y) if self.mouse.right => {
                         self.cam.fly_faster(y);
                         self.ed.toast(format!("{} {:.0} m/s", tr("Flying speed", "Скорость полёта"), self.cam.fly_speed));
                         return;
@@ -2843,7 +2944,28 @@ impl ApplicationHandler for App {
         }
     }
 
+    fn device_event(&mut self, _el: &ActiveEventLoop, _id: winit::event::DeviceId, event: winit::event::DeviceEvent) {
+        if let winit::event::DeviceEvent::MouseMotion { delta } = event {
+            if self.mouse.right && self.mouse.look_raw {
+                self.mouse.look_acc.0 += delta.0;
+                self.mouse.look_acc.1 += delta.1;
+            }
+        }
+    }
+
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        // (nobody at the mouse or keys, the view still: a few frames a second are enough)
+        let idle = self.last_input.elapsed().as_secs_f32() > 3.0 && !self.cam.is_moving() && !self.lib.scanning && self.assets.as_ref().map(|a| a.pending == 0).unwrap_or(true) && self.shot.is_none() && !crate::render::profile::enabled();
+        if idle {
+            if self.last.elapsed().as_millis() >= 50 {
+                if let Some(g) = &self.gfx {
+                    g.window.request_redraw();
+                }
+            }
+            el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + std::time::Duration::from_millis(50)));
+            return;
+        }
+        el.set_control_flow(ControlFlow::Poll);
         if let Some(g) = &self.gfx {
             g.window.request_redraw();
         }
@@ -2866,6 +2988,27 @@ impl ApplicationHandler for App {
         }
         self.prefs.save();
     }
+}
+
+/// The most tiles loaded at a time with tile streaming on.
+const STREAM_TILES: usize = 100;
+
+/// The tiles to load, when that changed: the nearest `STREAM_TILES` to the place the window
+/// is round (the camera's, until a click on the empty zone moves it), so they lie in a circle.
+/// `Some((None, _))`: everything (streaming off, or a map that small).
+fn stream_window(doc: &Document, on: bool, at: &mut Option<DVec2>, cam: &Camera, seen: Option<(usize, u64, u64)>) -> Option<(Option<std::collections::HashSet<crate::doc::TileKey>>, (usize, u64, u64))> {
+    let centre = if on { *at.get_or_insert(DVec2::new(cam.target.x, cam.target.y)) } else { *at = None; DVec2::ZERO };
+    let stamp = if on { (doc.tiles.len(), centre.x.to_bits(), centre.y.to_bits()) } else { (0, 0, 0) };
+    if seen == Some(stamp) {
+        return None;
+    }
+    if !on || doc.tiles.len() <= STREAM_TILES {
+        return Some((None, stamp));
+    }
+    let half = DVec2::splat(tile_size() * 0.5);
+    let mut near: Vec<(f64, crate::doc::TileKey)> = doc.tiles.keys().map(|k| ((tile_origin(*k) + half - centre).length_squared(), *k)).collect();
+    near.select_nth_unstable_by(STREAM_TILES, |a, b| a.0.total_cmp(&b.0));
+    Some((Some(near[..STREAM_TILES].iter().map(|n| n.1).collect()), stamp))
 }
 
 /// Write the window's picture to a PNG (the screenshot mode).

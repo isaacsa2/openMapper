@@ -21,36 +21,38 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Linux libraries
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libwayland-dev
+      - name: Check partial Portuguese catalogues
+        run: python3 tools/check-locales.py
       - run: cargo build --release --locked
       - run: cargo test --release --locked
 
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --release --locked
 
   locale-preview-windows:
-    # A downloadable Windows build for screenshots and hands-on PR #12 locale review.
+    # Pull request #12 test package for Portuguese screenshots.
     if: github.event_name == 'pull_request' && github.event.pull_request.number == 12
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
         with:
           key: locale-preview-windows-x64
-      - name: Validate embedded language catalogues
-        run: python tools/check-locales.py
+      - name: Check partial Portuguese catalogues
+        run: python -X utf8 tools/check-locales.py
       - name: Package test build
         shell: pwsh
         run: ./tools/package-windows.ps1 -Target x86_64-pc-windows-msvc
@@ -69,7 +71,7 @@ jobs:
       BASE: ${{ github.event.pull_request.base.sha }}
       MAX_BYTES: 1000000
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Fetch the base commit
         run: git fetch --no-tags --depth=1 origin "$BASE"
       - name: No large files

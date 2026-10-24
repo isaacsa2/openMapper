@@ -152,6 +152,8 @@ impl Camera {
         let lift = ground + 1.0 - eye.z;
         if lift > 0.0 {
             self.target.z += lift;
+            // (shown at once: easing up while the view turns would shake it)
+            self.snap();
         }
     }
 

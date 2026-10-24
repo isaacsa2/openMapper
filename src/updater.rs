@@ -182,7 +182,7 @@ impl Updater {
                     ui.label(RichText::new(format!("{} {}", tr("New version:", "Новая версия:"), r.version)).strong());
                     if !r.notes.is_empty() {
                         egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
-                            ui.label(RichText::new(r.notes.trim()).small());
+                            crate::markdown::show(ui, r.notes.trim());
                         });
                     }
                     ui.horizontal(|ui| {
@@ -367,7 +367,7 @@ fn extract_program(asset: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
         for i in 0..z.len() {
             let mut f = z.by_index(i).map_err(|e| e.to_string())?;
-            let name = f.name().replace('\\', "/");
+            let name = f.name().map_err(|e| e.to_string())?.replace('\\', "/");
             let ok = name.rsplit('/').next() == Some(exe) && (!cfg!(target_os = "macos") || name.ends_with("Contents/MacOS/openmapper"));
             if f.is_file() && ok {
                 let mut out = Vec::new();

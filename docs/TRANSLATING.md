@@ -1,31 +1,36 @@
 # Interface languages
 
-The language menu offers English, Português (Brasil), Português (Portugal), Deutsch and
-Русский. The selected language is stored with the preferences. Empty preferences follow
-the operating system, including the Windows locale and regional Portuguese codes.
+The editor supports English, Português (Brasil), Português (Portugal) and Русский.
+The selected language is saved in preferences. When no language is set, the
+operating-system locale (including the Windows region) selects PT-BR/PT-PT or
+Russian when available; otherwise English is used.
 
-Existing `tr("English", "Русский")` calls remain valid. Russian keeps its contextual inline
-text; `locales/ru.json` is a reference catalogue. The other languages use embedded UTF-8
-JSON catalogues keyed by the English text. No service, model, download or network request
-is used to translate text while the editor runs. Future missing entries fall back to English.
+Existing `tr("English", "Русский")` calls keep Russian inline, so no separate
+Russian or English catalogue is needed. The two embedded UTF-8 Portuguese
+catalogues are `locales/pt-BR.json` and `locales/pt-PT.json`. No network or
+machine translation service is used when the editor runs.
 
-`locales/en.json` lists the source labels. Run `python3 tools/check-locales.py` after changing
-interface text; it checks source coverage, empty entries and preservation of format fields,
-environment-variable names and URLs. Add new command-palette labels too.
+## Explicitly partial catalogues
 
-The Portuguese variants have separate wording (for example Salvar/Guardar and
-arquivo/ficheiro); changes in one catalogue do not silently change the other. The first
-catalogues cover 2,065 source labels, including command-palette macros. Menus and common
-editor terminology have received an initial review. Long help/error text and visual fit
-still need language-speaker and in-app review; coverage is not a claim of linguistic accuracy.
+The Portuguese catalogues contain a limited, editorially corrected subset of
+menus, frequent commands, errors and guidance. Missing labels intentionally
+fall back to English. This avoids presenting the original large set of
+unreviewed automatic translations as accepted UI copy; thorough native-speaker
+review and in-app layout acceptance remain outstanding.
 
-## Windows preview for PR #12
+Run `python3 tools/check-locales.py` whenever changing a label. CI now runs
+the checker and rejects stale catalogue keys, blank translations, generated
+token markers and missing protected literals. New untranslated source labels
+use English fallback until deliberately added. Both Portuguese files keep
+the same keys; core UI labels must have translations.
 
-PR #12's CI includes a Windows x64 preview job. After it completes, open the
-**CI** run associated with this PR, download the **openMapper-PR12-Windows-x64**
-artifact and extract its ZIP to run `openmapper.exe`. This is a test build, not
-an official release. The ZIP includes the README and tutorial; an OMSI 2
-installation is still required to work with OMSI maps. The language menu is
-available in **File > Language**. Test menus, dialogs, long labels and text
-wrapping in all five languages and attach screenshots to the PR. Artifacts are
-retained for 14 days.
+## Windows x64 preview for PR #12
+
+Open this PR's **CI** run, download the **openMapper-PR12-Windows-x64**
+artifact from the Artifacts section, and extract both the Actions ZIP and the
+included application ZIP. Run `openmapper.exe` (Windows x64).
+This is a test build and requires OMSI 2 to edit its maps.
+Switch languages in **View > Language**. Capture and share screenshots of
+menus, toolbar, palette, and guidance/errors in both Portuguese variants.
+Note incorrect words and clipped text; unreviewed entries will appear in
+English by design. Artifacts are retained for 14 days.

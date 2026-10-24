@@ -13,12 +13,12 @@ pub enum Quality {
 impl Quality {
     pub const ALL: [Quality; 3] = [Quality::Low, Quality::Medium, Quality::High];
 
-    /// From the settings (`OPENMAPPER_GRAPHICS` wins, for checks); High when not set.
+    /// From the settings (`OPENMAPPER_GRAPHICS` wins, for checks); Medium when not set.
     pub fn from_code(c: &str) -> Quality {
         let env = std::env::var("OPENMAPPER_GRAPHICS").unwrap_or_default();
         match if env.is_empty() { c } else { env.as_str() } {
             "low" => Quality::Low,
-            "medium" => Quality::Medium,
+            "medium" | "" => Quality::Medium,
             _ => Quality::High,
         }
     }
