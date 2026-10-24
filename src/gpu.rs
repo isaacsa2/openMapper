@@ -6,6 +6,15 @@ use winit::window::Window;
 
 pub const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// The graphics memory ran out (wgpu reported it instead of a creation succeeding).
+static OUT_OF_MEMORY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the graphics memory ran out since the last time asked. The renderer lets go of what
+/// it can rebuild (the models, the far ground) and goes on, in place of the editor closing.
+pub fn take_out_of_memory() -> bool {
+    OUT_OF_MEMORY.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
 pub struct Gpu {
     pub surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
@@ -65,8 +74,19 @@ impl Gpu {
             label: Some("openMapper"),
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            // (big maps: blocks are not set aside beyond what is used)
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
             ..Default::default()
         }))?;
+        // (running out of graphics memory is not a reason to close the editor: the renderer
+        // frees what it can make again; any other error is fatal, as wgpu has it by default)
+        device.on_uncaptured_error(Arc::new(|e: wgpu::Error| match e {
+            wgpu::Error::OutOfMemory { source } => {
+                log::error!("graphics memory ran out: {source}");
+                OUT_OF_MEMORY.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            other => panic!("wgpu error: {other}"),
+        }));
         let size = window.inner_size();
         let caps = surface.get_capabilities(&adapter);
         let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0]).remove_srgb_suffix();

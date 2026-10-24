@@ -4,6 +4,34 @@ Releases are tagged `v<version>`; the downloads are on the
 [Releases](https://github.com/openOMSI-org/openMapper/releases) page, each with the notes of its
 version from this file.
 
+## Unreleased
+
+### Added
+- **Multiplayer** (File > Multiplayer…): several people edit one map at once. One hosts the map open in their openMapper; the others join on the same network or from anywhere through a free Cloudflare quick tunnel (openOMSI's own). Tiles, the global settings and groups are shared as they are made; an edit made on a tile somebody else changed first is put back and its author told. Undo leaves the others' edits alone, and each editor hands out IDCodes of its own. The others' cursors, names and selections are drawn in the view in their colours. The timetable, the traffic and the descriptions stay the host's for now, and the host saves the map.
+
+- **Load 100 tiles at a time** (View > Load 100 tiles at a time, off by default; asked once when a map is first opened): as in OMSI 2's own editor, only the 100 tiles nearest the camera are kept on the graphics card and drawn; the rest are hidden. A click on the empty zone loads the 100 tiles round that place and hides the earlier ones, so very big maps stay light.
+- **Styled Markdown** in the release notes of the update window: headings, bold, italics, `code`, code blocks, lists, quotes, rules and links.
+
+### Changed
+- A window nobody touches redraws about 20 times a second instead of every frame.
+
+### Fixed
+- **The Map editor camera** looks and flies like a 3D editor's: the right button held looks round (the cursor held and hidden), W A S D fly with Q down and E up, the wheel sets the speed meanwhile and otherwise zooms to the cursor, the middle button pans.
+- **Unity-style camera was jerky** with the right button: the cursor is held and hidden while it looks round, the turn comes from the mouse's own motion applied once per frame (no more jumps at the screen's edge), and lifting the eye over the ground is shown at once instead of easing while the view turns.
+- **A road can leave a junction** ([#18](https://github.com/openOMSI-org/openMapper/issues/18)): clicking on a junction's plate (anywhere on it, its corners and the open side too) starts a new road from its middle, as another arm of it. The road ends at the plate's edge and a loose road end at it no longer takes the click.
+- **Out of graphics memory** ([#16](https://github.com/openOMSI-org/openMapper/issues/16)): a tile of plain ground now costs the graphics card only its terrain (the paint masks and the ground cut are made only for tiles that have paint or roads, and one shared blank is used otherwise), so a map of thousands of tiles fits. If the graphics memory still runs out, the editor lets go of what it can build again and goes on instead of closing; blocks are no longer set aside beyond what is used.
+
+## 0.1.3 - 2026-10-24
+
+### Changed
+- **Selection no longer covers what is selected** ([#11](https://github.com/openOMSI-org/openMapper/issues/11)): a selected road or object is not painted orange any more. A road shows a thin outline along its two edges, an object a small ball; the road, kerb or object stays visible under it.
+- **Grips are balls sized by the road**: the points that reshape a selected spline are small shaded balls, as big as the spline is wide (a kerb's small, a street's larger) and never smaller than a few pixels however far the camera is. They are picked by the ray through the ball, with room beyond its edge, so a click near the edge works.
+- The licence is GNU AGPL v3 only (`AGPL-3.0-only`), as openOMSI's; the earlier MIT notice stays for the versions distributed under it.
+- Dependencies updated: `rfd` 0.17, `base64` 0.23, `tiny-skia` 0.12, `serde_json`, and the GitHub Actions of the release setup.
+
+### Fixed
+- The version badge in the README showed a fixed number; it now follows the latest release by itself.
+
 ## 0.1.2 - 2026-10-23
 
 ### Added

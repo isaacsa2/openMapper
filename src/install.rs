@@ -43,7 +43,7 @@ pub struct Prefs {
     /// The OMSI 2 folder chosen by hand (empty: found by itself).
     #[serde(default)]
     pub omsi_root: String,
-    /// "en" or "ru" (empty: the system's language).
+    /// "en", "ru", "pt-BR" or "pt-PT" (empty: the system's language).
     #[serde(default)]
     pub language: String,
     /// Maps opened lately, newest first (global.cfg paths).
@@ -68,6 +68,10 @@ pub struct Prefs {
     /// builders) or "fly" (like Unity / Unreal: right button looks round, W A S D fly).
     #[serde(default)]
     pub camera: String,
+    /// Only the tiles round the place looked at are loaded, 100 at a time, as in OMSI 2's own
+    /// editor (None: not asked yet; the default is off).
+    #[serde(default)]
+    pub tile_streaming: Option<bool>,
     /// Graphics quality: "low", "medium", "high" (empty: high).
     #[serde(default)]
     pub graphics: String,
