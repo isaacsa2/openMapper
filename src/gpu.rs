@@ -19,20 +19,46 @@ pub struct Gpu {
     pub msaa: wgpu::TextureView,
     /// Samples a pixel of the 3D view (1: no edge smoothing, drawn straight into the frame).
     pub samples: u32,
+    /// The most samples a pixel this adapter draws for both the colour and the depth target.
+    pub max_samples: u32,
 }
 
 impl Gpu {
     pub fn new(window: Arc<Window>) -> anyhow::Result<Gpu> {
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = wgpu::Backends::PRIMARY | wgpu::Backends::GL;
-        let instance = wgpu::Instance::new(descriptor);
-        let surface = instance.create_surface(window.clone())?;
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            ..Default::default()
-        }))?;
+        // (the first way that gives an adapter wins: every backend, then GL alone, then the
+        // software adapter; an old driver that fails one of them still starts the editor)
+        let attempts = [(wgpu::Backends::PRIMARY | wgpu::Backends::GL, false), (wgpu::Backends::GL, false), (wgpu::Backends::PRIMARY | wgpu::Backends::GL, true)];
+        let mut found = None;
+        let mut last = anyhow::anyhow!("no graphics adapter");
+        for (backends, fallback) in attempts {
+            let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+            descriptor.backends = backends;
+            let instance = wgpu::Instance::new(descriptor);
+            let surface = match instance.create_surface(window.clone()) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("graphics {backends:?} (software {fallback}): no surface: {e}");
+                    last = e.into();
+                    continue;
+                }
+            };
+            match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: fallback,
+                ..Default::default()
+            })) {
+                Ok(a) => {
+                    found = Some((surface, a));
+                    break;
+                }
+                Err(e) => {
+                    log::warn!("graphics {backends:?} (software {fallback}): no adapter: {e}");
+                    last = e.into();
+                }
+            }
+        }
+        let Some((surface, adapter)) = found else { return Err(last) };
         let info = adapter.get_info();
         log::info!("GPU: {} ({:?})", info.name, info.backend);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -59,8 +85,12 @@ impl Gpu {
             view_formats: if scene_format != format { vec![scene_format] } else { vec![] },
         };
         surface.configure(&device, &config);
-        let (depth, msaa) = targets(&device, &config, 4);
-        Ok(Gpu { surface, device, queue, config, scene_format, adapter_name: format!("{} ({:?})", info.name, info.backend), depth, msaa, samples: 4 })
+        let supported = |f: wgpu::TextureFormat| adapter.get_texture_format_features(f).flags.supported_sample_counts();
+        let (colour, depth_counts) = (supported(scene_format), supported(DEPTH));
+        let max_samples = [8u32, 4, 2].into_iter().find(|n| colour.contains(n) && depth_counts.contains(n)).unwrap_or(1);
+        let samples = max_samples.min(4);
+        let (depth, msaa) = targets(&device, &config, samples);
+        Ok(Gpu { surface, device, queue, config, scene_format, adapter_name: format!("{} ({:?})", info.name, info.backend), depth, msaa, samples, max_samples })
     }
 
     pub fn resize(&mut self, w: u32, h: u32) {
@@ -77,6 +107,7 @@ impl Gpu {
 
     /// Change the samples a pixel (the renderer is made again after it).
     pub fn set_samples(&mut self, n: u32) {
+        let n = if n > self.max_samples { self.max_samples } else { n };
         self.samples = n;
         let (d, m) = targets(&self.device, &self.config, n);
         self.depth = d;

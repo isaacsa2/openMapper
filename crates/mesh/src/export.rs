@@ -605,7 +605,7 @@ fn write_gltf(objs: &[Placed], mats: &Mats, out: &mut Out, glb: bool) -> io::Res
         let wide = n > 65535;
         let mut primitives = Vec::new();
         for id in t.materials_used() {
-            let idx: Vec<u32> = t.indices.chunks(3).zip(&t.tri_material).filter(|(_, &m)| m == id).flat_map(|(c, _)| c.iter().copied()).collect();
+            let idx: Vec<u32> = t.indices.chunks(3).zip(&t.tri_material).filter(|(_, m)| **m == id).flat_map(|(c, _)| c.iter().copied()).collect();
             bytes.clear();
             for &i in &idx {
                 if wide {

@@ -224,7 +224,9 @@ impl Slippy {
         }
         if resp.hovered() {
             let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
-            let dz = scroll as f64 / 120.0 + (pinch as f64).log2();
+            // (the wheel over the map is the map's: the panel round it must not scroll with it)
+            ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+            let dz = scroll as f64 / 90.0 + (pinch as f64).log2();
             if dz != 0.0 {
                 let at = resp.hover_pos().map(|p| self.to_merc(rect, p)).unwrap_or(self.centre);
                 let before = self.to_screen(rect, at);

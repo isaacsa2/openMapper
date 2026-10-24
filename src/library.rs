@@ -172,7 +172,7 @@ impl Library {
     }
 
     /// Assets of a kind and category matching a search (words in any order).
-    pub fn filter<'a>(&'a self, kind: Kind, cat: Option<Category>, search: &str) -> impl Iterator<Item = &'a Asset> + 'a {
+    pub fn filter<'a>(&'a self, kind: Kind, cat: Option<Category>, search: &str) -> impl Iterator<Item = &'a Asset> + 'a + use<'a> {
         let words: Vec<String> = search.to_lowercase().split_whitespace().map(str::to_string).collect();
         self.assets
             .iter()

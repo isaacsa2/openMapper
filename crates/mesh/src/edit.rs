@@ -1844,7 +1844,7 @@ fn split_repeats(f: Face) -> Vec<Face> {
 
 /// A face's corners turned to start at its lowest vertex.
 fn canonical(verts: &[u32]) -> Vec<u32> {
-    let at = verts.iter().enumerate().min_by_key(|(_, &v)| v).map(|(i, _)| i).unwrap_or(0);
+    let at = verts.iter().enumerate().min_by_key(|(_, v)| **v).map(|(i, _)| i).unwrap_or(0);
     verts[at..].iter().chain(&verts[..at]).copied().collect()
 }
 
@@ -2037,7 +2037,7 @@ pub fn dissolve_vertices(mesh: &mut Mesh, sel: &Selection) -> Selection {
         made.push(true);
     }
     compact(mesh);
-    Selection::from_faces(mesh, made.iter().enumerate().filter(|(_, &m)| m).map(|(i, _)| i).collect::<Vec<_>>())
+    Selection::from_faces(mesh, made.iter().enumerate().filter(|(_, m)| **m).map(|(i, _)| i).collect::<Vec<_>>())
 }
 
 /// A polygon's spikes (a corner whose neighbours are the same vertex) and repeated corners
@@ -2096,7 +2096,7 @@ pub fn dissolve_edges(mesh: &mut Mesh, sel: &Selection) -> Selection {
         }
     }
     compact(mesh);
-    Selection::from_faces(mesh, made.iter().enumerate().filter(|(_, &m)| m).map(|(i, _)| i).collect::<Vec<_>>())
+    Selection::from_faces(mesh, made.iter().enumerate().filter(|(_, m)| **m).map(|(i, _)| i).collect::<Vec<_>>())
 }
 
 /// Dissolve faces: each connected piece of selected faces joined into one polygon (pieces

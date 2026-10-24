@@ -45,63 +45,83 @@ impl Mosaic {
             return Err(tr("The area is too large for this zoom", "Слишком большая область для этого масштаба").into());
         }
         let jobs: Vec<(u32, u32)> = (0..ny).flat_map(|j| (0..nx).map(move |i| (i, j))).collect();
-        let next = Mutex::new(0usize);
-        let got: Mutex<Vec<Option<(RgbImage, bool)>>> = Mutex::new(vec![None; jobs.len()]);
+        let cancelled = || -> Error { tr("Cancelled", "Отменено").into() };
+        // (no picture at all: grey, or 0 m)
+        let empty = if heights { [128u8, 0, 0] } else { [128u8, 128, 128] };
+        // the first tile tells the pixels a tile has; every later one is copied into the
+        // mosaic as it arrives, so the tiles are never held twice
+        let first = one(z, x0, y0, heights, fetch)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        let px = first.as_ref().map(|t| t.0.width()).unwrap_or(256).max(1);
+        let mut pixels = vec![0u8; nx as usize * px as usize * ny as usize * px as usize * 3];
+        for c in pixels.chunks_exact_mut(3) {
+            c.copy_from_slice(&empty);
+        }
+        struct Out {
+            rgb: Vec<u8>,
+            coarser: bool,
+        }
+        let out = Mutex::new(Out { rgb: pixels, coarser: false });
+        let place = |i: usize, t: Option<(RgbImage, bool)>| {
+            let (ix, iy) = jobs[i];
+            let img = match t {
+                Some((img, up)) => {
+                    let img = if img.width() == px && img.height() == px {
+                        img
+                    } else {
+                        image::imageops::resize(&img, px, px, if heights { image::imageops::FilterType::Nearest } else { image::imageops::FilterType::Triangle })
+                    };
+                    Some((img, up))
+                }
+                None => None,
+            };
+            let mut o = out.lock().unwrap_or_else(|e| e.into_inner());
+            match img {
+                Some((img, up)) => {
+                    o.coarser |= up;
+                    for row in 0..px {
+                        let dst = (((iy * px + row) * nx * px + ix * px) * 3) as usize;
+                        let src = (row * px * 3) as usize;
+                        o.rgb[dst..dst + (px * 3) as usize].copy_from_slice(&img.as_raw()[src..src + (px * 3) as usize]);
+                    }
+                }
+                None => o.coarser = true,
+            }
+        };
+        place(0, first);
+        let next = Mutex::new(1usize);
         let err: Mutex<Option<Error>> = Mutex::new(None);
         std::thread::scope(|s| {
             for _ in 0..6 {
                 s.spawn(|| loop {
                     let i = {
-                        let mut n = next.lock().unwrap();
+                        let mut n = next.lock().unwrap_or_else(|e| e.into_inner());
                         let i = *n;
                         *n += 1;
                         i
                     };
-                    if i >= jobs.len() || cancel.load(Ordering::Relaxed) || err.lock().unwrap().is_some() {
+                    if i >= jobs.len() || cancel.load(Ordering::Relaxed) || err.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
                         return;
                     }
                     let (ix, iy) = jobs[i];
-                    match one(z, x0 + ix, y0 + iy, heights, fetch) {
-                        Ok(t) => got.lock().unwrap()[i] = t,
-                        Err(e) => *err.lock().unwrap() = Some(e),
+                    // (a panic on an odd picture is that tile's failure, not the end of the job)
+                    let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| one(z, x0 + ix, y0 + iy, heights, fetch))).unwrap_or_else(|_| Err("a tile could not be read".into()));
+                    match got {
+                        Ok(t) => place(i, t),
+                        Err(e) => *err.lock().unwrap_or_else(|e| e.into_inner()) = Some(e),
                     }
                 });
             }
         });
         if cancel.load(Ordering::Relaxed) {
-            return Err(tr("Cancelled", "Отменено").into());
+            return Err(cancelled());
         }
-        if let Some(e) = err.into_inner().unwrap() {
+        if let Some(e) = err.into_inner().unwrap_or_else(|e| e.into_inner()) {
             return Err(e);
         }
-        let got = got.into_inner().unwrap();
-        let px = got.iter().flatten().map(|t| t.0.width()).max().unwrap_or(256).max(1);
-        let mut rgb = vec![0u8; (nx * px * ny * px * 3) as usize];
-        let mut coarser = false;
-        // (no picture at all: grey, or 0 m)
-        let empty = if heights { [128u8, 0, 0] } else { [128u8, 128, 128] };
-        for (i, t) in got.into_iter().enumerate() {
-            let (ix, iy) = jobs[i];
-            let img = match t {
-                Some((img, up)) => {
-                    coarser |= up;
-                    if img.width() == px && img.height() == px {
-                        img
-                    } else {
-                        image::imageops::resize(&img, px, px, if heights { image::imageops::FilterType::Nearest } else { image::imageops::FilterType::Triangle })
-                    }
-                }
-                None => {
-                    coarser = true;
-                    RgbImage::from_pixel(px, px, image::Rgb(empty))
-                }
-            };
-            for row in 0..px {
-                let dst = (((iy * px + row) * nx * px + ix * px) * 3) as usize;
-                let src = (row * px * 3) as usize;
-                rgb[dst..dst + (px * 3) as usize].copy_from_slice(&img.as_raw()[src..src + (px * 3) as usize]);
-            }
-        }
+        let Out { rgb, coarser } = out.into_inner().unwrap_or_else(|e| e.into_inner());
         Ok(Mosaic { z, x0, y0, nx, ny, px, rgb, coarser })
     }
 

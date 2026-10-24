@@ -9,6 +9,26 @@ version from this file.
 ### Added
 - **Multiplayer** (File > Multiplayer…): several people edit one map at once. One hosts the map open in their openMapper; the others join on the same network or from anywhere through a free Cloudflare quick tunnel (openOMSI's own). Tiles, the global settings and groups are shared as they are made; an edit made on a tile somebody else changed first is put back and its author told. Undo leaves the others' edits alone, and each editor hands out IDCodes of its own. The others' cursors, names and selections are drawn in the view in their colours. The timetable, the traffic and the descriptions stay the host's for now, and the host saves the map.
 
+## 0.1.2 - 2026-10-23
+
+### Added
+- **Hot reload**: new, changed and removed objects, splines and textures in the content folder (and, a little slower, in the OMSI 2 folder) show up in the catalogue and on the map by themselves, a moment after the files stop changing. Nothing to press; what openMapper writes itself does not trigger it.
+- **Test drive in the original OMSI 2** (Map > Test drive in OMSI 2): the saved map and the objects, roads and textures made for it are copied into the OMSI 2 folder (asked once) and OMSI 2 is started (Windows).
+- **Pictures and patterns**: Objects > Shapes and lamps > Picture / pattern: a picture or texture becomes a panel object (on the ground like a decal, or standing like a sign) that is placed, moved, turned and scaled like any object; repeats make a pattern; transparency is taken from the picture.
+- **Light sources** (a lamp that glows and lights the ground round it, at night or always) and **sound sources** (a .wav that plays where the marker stands, with a reach and a volume; the marker shows in the editor only).
+- **A log file**: `~/.openomsi/logs/openmapper.log` (the last run's as `openmapper.previous.log`), with the version and the graphics adapter, every warning, and the message, place and backtrace of a crash. A crash of the program shows where the log is.
+
+### Fixed
+- **Maps made or saved in openMapper did not open in OMSI 2's own editor**: global.cfg lacked the sixth line of `[backgroundimage]` OMSI 2 reads (it took the next keyword for it), and tiles lacked the empty line after `[terrain]` and `[water]`, the line for the mirror flag of a spline and the `Object Nr.` lines OMSI 2's editor writes. Tiles and global.cfg of the stock maps are now written back the way OMSI 2 wrote them, and the ground painting masks have the header of OMSI 2's own.
+- Satellite imagery and terrain: a download that fails (dropped connection, a busy server) is tried again twice, then the tile again; a tile that fails no longer ends the job at three in a row by chance; an error inside the job ends it with a message instead of leaving the window waiting; the picture of a tile is built in place instead of held twice in memory (the usual end of long runs); locks poisoned by a crash elsewhere no longer cascade.
+- Start on older graphics drivers (Windows 10): the editor tries every graphics backend, then OpenGL alone, then the software adapter, before giving up, and uses the most edge smoothing the adapter can really do.
+- "This app can't run on your PC" on Windows 10: it is the ARM64 download on an Intel / AMD PC. Each Windows zip now has WHICH-FILE.txt saying which to use and how to tell, and the program has a manifest for Windows 10 and 11.
+- A crash with a wgpu validation error ("Texture … has been destroyed"): the interface's textures are now freed after the frame that may still draw them is submitted.
+- The mouse wheel over the world map (satellite choice) zooms the map only and no longer scrolls the panel beside it; the zoom steps are finer.
+
+### Changed
+- Rust 2024 edition (rust-version 1.85).
+
 ## 0.1.1 - 2026-10-23
 
 ### Added

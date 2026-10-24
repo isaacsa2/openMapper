@@ -18,6 +18,25 @@ New-Item -ItemType Directory -Force (Join-Path $dir "docs") | Out-Null
 Copy-Item "target\$Target\release\openmapper.exe", README.md $dir
 Copy-Item docs\TUTORIAL.md (Join-Path $dir "docs")
 if (Test-Path LICENSE) { Copy-Item LICENSE $dir }
+# which of the two downloads a PC needs (the usual "this app can't run on your PC" is the wrong one)
+@"
+openMapper $version for Windows ($arch)
+
+This is the $arch build. If Windows says "This app can't run on your PC", you have the
+wrong one: download the other zip from the Releases page.
+
+  Intel / AMD PC (nearly all):          openMapper-$version-windows-x64.zip
+  Snapdragon / ARM PC (Copilot+, Surface Pro X):  openMapper-$version-windows-arm64.zip
+
+Check yours in Settings > System > About > System type.
+
+Если Windows пишет "Невозможно запустить это приложение на вашем ПК", скачан не тот архив.
+Обычный компьютер (Intel / AMD): openMapper-$version-windows-x64.zip.
+Компьютер на ARM (Snapdragon): openMapper-$version-windows-arm64.zip.
+Проверить: Параметры > Система > О системе > Тип системы.
+
+If openMapper stops or does not start, the log is in %USERPROFILE%\.openomsi\logs\openmapper.log
+"@ | Set-Content -Encoding UTF8 (Join-Path $dir "WHICH-FILE.txt")
 $zip = Join-Path $out "$name.zip"
 if (Test-Path $zip) { Remove-Item $zip }
 Compress-Archive -Path $dir -DestinationPath $zip

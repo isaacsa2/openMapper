@@ -42,6 +42,8 @@ pub enum Action {
     /// A test drive from the start point nearest the view (false), or the view itself seen
     /// in openOMSI with a free camera (true).
     PlayHere(bool),
+    /// A test drive in OMSI 2 itself (the map and what it needs copied into its folder).
+    PlayOriginal,
     /// Paste at this ground point (the view's menu).
     PasteAt(Option<glam::DVec3>),
     /// The groups kept for other maps.
@@ -172,6 +174,7 @@ pub struct UiState {
     pub uv_open: bool,
     pub uv: crate::ui_uv::UvEditor,
     pub signal_lamps: Vec<crate::editable::Lamp>,
+    pub makers: crate::makers::Settings,
     /// Scaling an object in the properties keeps its proportions.
     pub scale_uniform: bool,
     /// Saved views (View menu, Ctrl+1…9).
@@ -246,6 +249,7 @@ impl Default for UiState {
             uv_open: false,
             uv: Default::default(),
             signal_lamps: vec![crate::editable::Lamp::Red, crate::editable::Lamp::Yellow, crate::editable::Lamp::Green],
+            makers: Default::default(),
             scale_uniform: true,
             views: Default::default(),
             palette: Default::default(),
@@ -1028,6 +1032,9 @@ fn menu_bar(root: &mut egui::Ui, st: &mut UiState, ed: &mut Editor, can_undo: bo
                     actions.push(Action::Play);
                 }
                 play_here_items(ui, game_found, actions);
+                if menu_item(ui, Some(Icon::Play), tr("Test drive in OMSI 2 (the original)…", "Тест-драйв в оригинальном OMSI 2…"), "", true) {
+                    actions.push(Action::PlayOriginal);
+                }
                 if menu_item(ui, Some(Icon::CheckCircle), tr("Check in openOMSI…", "Проверка в openOMSI…"), "", game_found) {
                     actions.push(Action::GameCheck);
                 }
@@ -1219,6 +1226,7 @@ fn tool_panel(
             egui::CollapsingHeader::new(RichText::new(tr("Shapes and lamps", "Фигуры и светильники")).strong()).id_salt("shapes").default_open(false).show(ui, |ui| {
                 crate::ui_mesh::primitives_grid(ui, actions);
                 crate::ui_mesh::lamp_makers(ui, &mut st.signal_lamps, actions);
+                crate::ui_mesh::extra_makers(ui, &mut st.makers, actions);
             });
             ui.add_space(4.0);
             catalogue(ui, st, ed, lib, thumbs, wanted, Kind::Object, actions)

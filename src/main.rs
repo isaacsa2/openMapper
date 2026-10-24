@@ -29,6 +29,7 @@ mod editor;
 mod gpu;
 mod heightmap;
 mod history;
+mod hot;
 mod hof;
 mod i18n;
 mod icons;
@@ -38,11 +39,13 @@ mod install;
 mod junction;
 mod lanes;
 mod lanes_edit;
+mod makers;
 mod mapgroups;
 mod merge;
 mod meshedit;
 mod meshops;
 mod library;
+mod logging;
 mod models;
 mod pbr_maker;
 mod onground;
@@ -110,7 +113,7 @@ mod ui_traffic;
 #[cfg(windows)]
 fn attach_console() {
     #[link(name = "kernel32")]
-    extern "system" {
+    unsafe extern "system" {
         fn AttachConsole(process: u32) -> i32;
     }
     // (ATTACH_PARENT_PROCESS)
@@ -122,7 +125,7 @@ fn attach_console() {
 fn main() {
     #[cfg(windows)]
     attach_console();
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn")).init();
+    logging::init("info,wgpu_core=warn,wgpu_hal=warn,naga=warn");
     // `openmapper --check path/to/global.cfg` checks a map and prints what it found
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     if args.get(1).map(|a| a == "--check").unwrap_or(false) {

@@ -1,7 +1,8 @@
 [package]
 name = "openmapper-mesh"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 description = "openMapper's polygon meshes: primitives, booleans, modifiers, UV unwrapping, baking and export"
 publish = false

@@ -819,7 +819,7 @@ impl Sheet {
         }
         let mut loops = Sets::new(self.points.len());
         let mut on_border = vec![false; self.points.len()];
-        for (&(a, b), _) in edges.iter().filter(|(_, &n)| n == 1) {
+        for (&(a, b), _) in edges.iter().filter(|(_, n)| **n == 1) {
             loops.join(a, b);
             on_border[a] = true;
             on_border[b] = true;

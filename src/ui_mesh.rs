@@ -107,6 +107,10 @@ pub enum MeshAction {
     Bake(BakeChoice),
     NewSignal(Vec<crate::editable::Lamp>),
     NewLamp,
+    /// A picture or repeating texture on a panel, a light source, a sound source.
+    NewPicture(crate::makers::Settings),
+    NewLight(crate::makers::Settings),
+    NewSound(crate::makers::Settings),
     /// The selected roads and splines made an openMapper object of their shape (in place of
     /// them with `true`), to edit as a mesh.
     SplinesToObject(bool),
@@ -1258,5 +1262,57 @@ pub fn lamp_makers(ui: &mut egui::Ui, lamps: &mut Vec<Lamp>, actions: &mut Vec<A
                 }
             }
         }
+    });
+}
+
+/// Pictures and patterns, lights and sounds to put on the map, in the Objects tool's Shapes.
+pub fn extra_makers(ui: &mut egui::Ui, s: &mut crate::makers::Settings, actions: &mut Vec<Action>) {
+    ui.add_space(6.0);
+    ui.label(RichText::new(tr("Picture, light, sound", "Картинка, свет, звук")).small().color(DIM));
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(tr("Picture / pattern…", "Картинка / паттерн…")).on_hover_text(tr("Choose a picture or a texture: it becomes an object you place, move, turn and scale like any other. Several repeats make a pattern", "Выберите картинку или текстуру: получится объект, который ставится, двигается, поворачивается и масштабируется как любой другой. Несколько повторов дают паттерн")).clicked() {
+            actions.push(Action::Mesh(MeshAction::NewPicture(s.clone())));
+        }
+        if ui.button(tr("Light source", "Источник света")).on_hover_text(tr("A lamp that glows and lights the ground round it", "Лампа, которая светится и освещает землю вокруг")).clicked() {
+            actions.push(Action::Mesh(MeshAction::NewLight(s.clone())));
+        }
+        if ui.button(tr("Sound source…", "Источник звука…")).on_hover_text(tr("Choose a sound file (.wav): it plays where you put the marker, as far as the radius carries; the marker shows in the editor only", "Выберите звуковой файл (.wav): он звучит там, где стоит маркер, на расстояние радиуса; маркер виден только в редакторе")).clicked() {
+            actions.push(Action::Mesh(MeshAction::NewSound(s.clone())));
+        }
+    });
+    egui::Grid::new("extra makers").num_columns(2).show(ui, |ui| {
+        ui.label(RichText::new(tr("Picture width, m", "Ширина картинки, м")).small().color(DIM));
+        ui.add(egui::DragValue::new(&mut s.picture_width).range(0.1..=300.0).speed(0.1));
+        ui.end_row();
+        ui.label(RichText::new(tr("Repeats", "Повторов")).small().color(DIM));
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut s.picture_repeat[0]).range(0.01..=200.0).speed(0.1));
+            ui.add(egui::DragValue::new(&mut s.picture_repeat[1]).range(0.01..=200.0).speed(0.1));
+        });
+        ui.end_row();
+        ui.label(RichText::new(tr("Picture", "Картинка")).small().color(DIM));
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut s.picture_standing, false, tr("on the ground", "на земле"));
+            ui.selectable_value(&mut s.picture_standing, true, tr("standing", "стоит"));
+        });
+        ui.end_row();
+        ui.label(RichText::new(tr("Light colour", "Цвет света")).small().color(DIM));
+        ui.color_edit_button_srgb(&mut s.light_color);
+        ui.end_row();
+        ui.label(RichText::new(tr("Light reach, m", "Дальность света, м")).small().color(DIM));
+        ui.add(egui::DragValue::new(&mut s.light_range).range(1.0..=200.0));
+        ui.end_row();
+        ui.label(RichText::new(tr("Light", "Свет")).small().color(DIM));
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut s.light_night_only, true, tr("at night", "ночью"));
+            ui.selectable_value(&mut s.light_night_only, false, tr("always", "всегда"));
+        });
+        ui.end_row();
+        ui.label(RichText::new(tr("Sound reach, m", "Дальность звука, м")).small().color(DIM));
+        ui.add(egui::DragValue::new(&mut s.sound_radius).range(1.0..=1000.0));
+        ui.end_row();
+        ui.label(RichText::new(tr("Sound volume", "Громкость звука")).small().color(DIM));
+        ui.add(egui::Slider::new(&mut s.sound_volume, 0.0..=1.0));
+        ui.end_row();
     });
 }
