@@ -24,7 +24,28 @@ for language in ("pt-BR", "pt-PT"):
     catalogues[language] = entries
     print(f"{language}: {len(entries)} corrected-subset entries, {len(source) - len(entries)} English fallbacks")
 assert catalogues["pt-BR"].keys() == catalogues["pt-PT"].keys()
-for key in ("Save", "File", "View", "Help", "Language", "Roads", "Objects", "Tiles"):
+for key in (
+    "Save", "File", "View", "Help", "Language", "Roads", "Objects", "Tiles",
+    # Keep the complete Map menu translated in both Portuguese variants.
+    "Calendar and place…",
+    "Signal routes…",
+    "Chrono scenarios…",
+    "Ground textures…",
+    "Check map…",
+    "Make the junctions again",
+    "Lines and timetable…",
+    "Traffic and AI…",
+    "Depot files (destinations)…",
+    "Satellite and terrain…",
+    "From OpenStreetMap…",
+    "GPS tracks to trace…",
+    "Tiles from another map…",
+    "Test drive in openOMSI",
+    "Test drive from the start point nearest the view",
+    "See this view in openOMSI",
+    "Test drive in OMSI 2 (the original)…",
+    "Check in openOMSI…",
+):
     assert key in source, ("core label no longer in source", key)
     for language, entries in catalogues.items():
         assert key in entries, (language, "missing core label", key)

@@ -12,8 +12,9 @@ machine translation service is used when the editor runs.
 
 ## Explicitly partial catalogues
 
-The Portuguese catalogues contain a limited, editorially corrected subset of
-menus, frequent commands, errors and guidance. Missing labels intentionally
+The Portuguese catalogues prioritize the main File/Edit/View/Tools/Map/Help
+menus (including all visible Map actions), the command palette, frequent tools,
+errors and guidance. These remain deliberately partial catalogues. Missing labels intentionally
 fall back to English. This avoids presenting the original large set of
 unreviewed automatic translations as accepted UI copy; thorough native-speaker
 review and in-app layout acceptance remain outstanding.
