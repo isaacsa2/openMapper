@@ -1106,8 +1106,7 @@ impl Editor {
         match self.acts_as() {
             Tool::Select => {
                 if self.drag == Drag::None {
-                    // (a grip is as big on the screen however near the camera is)
-                    let found = g.and_then(|g| self.handle_at(g.truncate(), ((g - o).length() * 0.012).clamp(1.0, 40.0)));
+                    let found = self.handle_at_ray(assets, o, d);
                     self.hover_handle = found.map(|f| f.1);
                     self.hover_handle_of = found.map(|f| f.0);
                     self.hover = if self.hover_handle.is_some() { self.selected } else { self.pick(assets, o, d, g) };
@@ -3912,7 +3911,7 @@ impl Editor {
             }
             _ => {}
         }
-        self.selection_extras(&mut x, cam, w);
+        self.selection_extras(&mut x, cam, w, assets);
         x.resized = self.scale_preview.clone();
         if let (Some(m), Some(view)) = (self.mesh.as_ref().filter(|m| m.editing), self.gizmo_view.as_ref()) {
             m.extras(view, &mut x);
@@ -4100,9 +4099,36 @@ impl Editor {
         out
     }
 
-    fn handle_at(&self, p: DVec2, r: f64) -> Option<((TileKey, i64), Handle)> {
-        // (a point beats the middle of a piece when they lie close)
-        self.handles().into_iter().map(|(s, h, q)| ((s, h), (q.truncate() - p).length() + if h == Handle::Mid { r * 0.3 } else { 0.0 })).filter(|(_, d)| *d < r).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(x, _)| x)
+    /// A grip as a ball: its centre and radius. The radius follows the size of the spline
+    /// (a kerb's grips are small, a street's larger), but never drops below a few pixels
+    /// on the screen, however far the camera is.
+    fn grip(&self, assets: &mut Assets, sp: (TileKey, i64), h: Handle, at: DVec3, dist: f64) -> (DVec3, f64) {
+        let half = self.doc.as_ref().and_then(|d| d.spline(sp.0, sp.1)).and_then(|s| assets.spline(&s.file)).map(|m| m.half_width as f64).unwrap_or(1.5);
+        let r = (half * 0.05).max(dist * 0.0025).clamp(0.05, 1.0);
+        let r = if h == Handle::Mid { r * 0.75 } else { r };
+        (at + DVec3::Z * (r * 0.5), r)
+    }
+
+    /// The grip the ray from `o` along `d` passes through (or just by: a grip takes clicks
+    /// well beyond its edge). A point beats the middle of a piece when they lie close.
+    fn handle_at_ray(&self, assets: &mut Assets, o: DVec3, d: DVec3) -> Option<((TileKey, i64), Handle)> {
+        let dir = d.normalize_or_zero();
+        if dir == DVec3::ZERO {
+            return None;
+        }
+        self.handles()
+            .into_iter()
+            .filter_map(|(sp, h, q)| {
+                let t = (q - o).dot(dir);
+                if t <= 0.0 {
+                    return None;
+                }
+                let (c, r) = self.grip(assets, sp, h, q, t);
+                let off = (c - (o + dir * (c - o).dot(dir))).length();
+                (off < r * 1.8).then_some(((sp, h), off / r + if h == Handle::Mid { 0.3 } else { 0.0 }))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(x, _)| x)
     }
 
     /// Take the picked point out of an AI path: the two pieces that meet there become one (its
@@ -6223,7 +6249,7 @@ impl Editor {
 
     /// The selection drawn over the view: splines' centre lines, a ring round each object
     /// selected with others, the grips of a spline selected alone, a reshape's new shape.
-    fn selection_extras(&self, x: &mut FrameExtras, cam: &crate::camera::Camera, w: f32) {
+    fn selection_extras(&self, x: &mut FrameExtras, cam: &crate::camera::Camera, w: f32, assets: &mut Assets) {
         let Some(doc) = self.doc.as_ref() else { return };
         let sels = self.selection();
         for s in &sels {
@@ -6231,18 +6257,28 @@ impl Editor {
                 Sel::Spline(k, id) => {
                     let Some(s) = doc.spline(k, id) else { continue };
                     let c = omsi_geometry::SplineCurve::from_map(s, tile_origin(k));
+                    // (the outline: the two edges of the road, thin (not across the ends: the grips sit there), nothing laid over it)
+                    let half = assets.spline(&s.file).map(|m| m.half_width as f64).unwrap_or(1.0).max(0.1);
                     let n = (s.length / 2.0).ceil().max(1.0) as usize;
+                    let at = |i: usize| c.point_at(s.length * i as f64 / n as f64);
+                    // (as thick as the road is wide, never thinner than a hairline on the screen)
+                    let thick = (half as f32 * 0.04).max(w * 0.12);
+                    let side = |i: usize, sign: f64| {
+                        let (a, b) = if i == 0 { (at(0), at(1)) } else { (at(i - 1), at(i)) };
+                        let t = (b - a).truncate().normalize_or_zero();
+                        at(i) + DVec3::new(-t.y, t.x, 0.0) * half * sign + DVec3::Z * 0.2
+                    };
                     for i in 0..n {
-                        let a = c.point_at(s.length * i as f64 / n as f64) + DVec3::Z * 0.2;
-                        let b = c.point_at(s.length * (i + 1) as f64 / n as f64) + DVec3::Z * 0.2;
-                        line(&mut x.overlay, cam, a, b, w, ORANGE);
+                        for sign in [-1.0, 1.0] {
+                            line(&mut x.overlay, cam, side(i, sign), side(i + 1, sign), thick, ORANGE);
+                        }
                     }
                 }
-                Sel::Object(k, id) if sels.len() > 1 => {
+                // (a small ball on the object: the object itself stays uncovered)
+                Sel::Object(k, id) => {
                     let Some(o) = doc.object(k, id) else { continue };
-                    ring(&mut x.overlay, cam, doc.object_world(k, o, false) + DVec3::Z * 0.2, w * 3.5, w * 0.5, ORANGE);
+                    ball(&mut x.overlay_depth, doc.object_world(k, o, false) + DVec3::Z * w as f64 * 0.5, w as f64 * 0.8, ORANGE);
                 }
-                _ => {}
             }
         }
         // what one object takes its state from (cyan) and what takes it from it
@@ -6259,12 +6295,12 @@ impl Editor {
             }
         }
         if self.acts_as() == Tool::Select {
-            let dw = w * 0.4;
+            let eye = cam.eye();
             for (sp, h, p) in self.handles() {
                 let on = (self.hover_handle == Some(h) && self.hover_handle_of == Some(sp)) || matches!(self.drag, Drag::Reshape(k, i, d) if d == h && (k, i) == sp);
                 let picked = self.path_point == Some((sp, h));
-                let r = if h == Handle::Mid { dw * 1.1 } else { dw * 1.8 };
-                disc(&mut x.overlay, cam, p + DVec3::Z * 0.3, r, if picked { ORANGE } else if on { GREEN } else { WHITE });
+                let (c, r) = self.grip(assets, sp, h, p, (p - eye).length());
+                ball(&mut x.overlay_depth, c, r, if picked { ORANGE } else if on { GREEN } else { WHITE });
             }
         }
         for plan in &self.carry_preview {
@@ -6293,14 +6329,21 @@ impl Editor {
     }
 }
 
-/// A ring on the ground.
-fn ring(out: &mut Vec<OverlayPoint>, cam: &crate::camera::Camera, c: DVec3, r: f32, width: f32, color: [f32; 4]) {
-    let n = 24;
-    for i in 0..n {
-        let a0 = i as f64 / n as f64 * std::f64::consts::TAU;
-        let a1 = (i + 1) as f64 / n as f64 * std::f64::consts::TAU;
-        let p = |a: f64| c + DVec3::new(a.cos(), a.sin(), 0.0) * r as f64;
-        line(out, cam, p(a0), p(a1), width, color);
+/// A shaded ball (the light from above and a little aside), for the grips.
+fn ball(out: &mut Vec<OverlayPoint>, c: DVec3, r: f64, color: [f32; 4]) {
+    let (rows, cols) = (8, 14);
+    let light = DVec3::new(0.35, -0.45, 0.82).normalize();
+    let at = |i: usize, j: usize| {
+        let (lat, lon) = (std::f64::consts::PI * i as f64 / rows as f64, std::f64::consts::TAU * j as f64 / cols as f64);
+        let n = DVec3::new(lat.sin() * lon.cos(), lat.sin() * lon.sin(), lat.cos());
+        let k = (0.5 + 0.5 * n.dot(light).max(0.0)) as f32;
+        OverlayPoint { pos: c + n * r, color: [color[0] * k, color[1] * k, color[2] * k, 1.0] }
+    };
+    for i in 0..rows {
+        for j in 0..cols {
+            let (a, b, c2, d) = (at(i, j), at(i, j + 1), at(i + 1, j), at(i + 1, j + 1));
+            out.extend([a, b, c2, b, d, c2]);
+        }
     }
 }
 
@@ -7871,7 +7914,7 @@ mod tests {
         eprintln!("selected {:?}", ed.selected);
         // drag its far end sideways
         ed.cursor = Some(DVec3::new(50.0, 90.0, 0.0));
-        let found = ed.handle_at(DVec2::new(50.0, 90.0), 2.0);
+        let found = ed.handle_at_ray(&mut assets, DVec3::new(50.0, 90.0, 40.0), -DVec3::Z);
         ed.hover_handle = found.map(|f| f.1);
         ed.hover_handle_of = found.map(|f| f.0);
         eprintln!("handle {:?}", ed.hover_handle);
@@ -7887,7 +7930,7 @@ mod tests {
         ed.select(Some(Sel::Spline((0, 0), 3)));
         let mid = ed.handles().iter().find(|h| h.1 == Handle::Mid).map(|h| h.2).unwrap();
         ed.cursor = Some(mid);
-        let found = ed.handle_at(mid.truncate(), 2.0);
+        let found = ed.handle_at_ray(&mut assets, mid + DVec3::new(0.0, 0.0, 40.0), -DVec3::Z);
         ed.hover_handle = found.map(|f| f.1);
         ed.hover_handle_of = found.map(|f| f.0);
         ed.left_press(&mut assets, &lib, false);
