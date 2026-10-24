@@ -1,0 +1,27 @@
+[package]
+name = "openmapper-collab"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "openMapper's multiplayer editing: one editor hosts a map, others join over TCP and edit it together"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+flate2 = "1"
+log = "0.4"
+# the WebSocket a Cloudflare quick tunnel carries (TLS ends at cloudflared)
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+
+[dev-dependencies]
+# openOMSI's own forwarding, the way peers come in through a tunnel
+omsi-net = { git = "https://github.com/openOMSI-org/openOMSI", rev = "c4738ed6f43f11b4c06ead299af7ac74280d5c5b" }
+
+# (as the editor's: the tests pack and unpack megabytes)
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

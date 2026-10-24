@@ -75,7 +75,9 @@ pub struct Instance {
 }
 
 /// Tints of what is selected and what is under the mouse.
-const SELECTED: [f32; 4] = [0.96, 0.50, 0.19, 0.45];
+// (the selection is not painted over what is selected: the editor draws a thin outline and
+// grips, so the thing stays visible)
+const SELECTED: [f32; 4] = [0.0; 4];
 const HOVERED: [f32; 4] = [1.0, 1.0, 1.0, 0.2];
 
 /// Surface codes of the depth pull (see mesh.wgsl).
