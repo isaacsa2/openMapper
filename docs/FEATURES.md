@@ -333,6 +333,8 @@ The complete list. A short overview is in the [README](../README.md).
     never make two with the same number.
   * The window shows who is in (each in their colour), the addresses to give out, whether
     one's edits have reached the others, and a chat.
+  * The others' cursors are drawn in the view with their names and the tool in their hand,
+    and what they have selected is ringed (objects) or traced (roads) in their colour.
   * Not shared yet: the timetable, the traffic and AI and the descriptions stay the host's (a
     guest's change of them is put back). The host saves the map; a guest's copy goes into
     `maps/<folder>_multiplayer`, saved once they leave. Everybody needs the same objects and

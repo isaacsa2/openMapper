@@ -230,6 +230,7 @@ fn two_editors_through_the_session() {
     let mut ana_ed = crate::editor::Editor::default();
     let mut doc = flat_map(2);
     doc.dir = content.join("maps").join("Grundorf");
+    add_object(&mut doc, (0, 0), 50, 120.0, 80.0);
     ana_ed.open(doc);
     // (opening reads the groups from the folder: given after)
     ana_ed.doc.as_mut().unwrap().groups.push(crate::mapgroups::MapGroup { name: "Stop".into(), ids: vec![100] });
@@ -261,6 +262,10 @@ fn two_editors_through_the_session() {
     assert_eq!(bruno_ed.doc.as_ref().unwrap().groups.len(), 1);
     assert_eq!(bruno_ed.doc.as_ref().unwrap().dir, content.join("maps").join("Grundorf_multiplayer"));
 
+    // Ana's cursor and selection, for Bruno to draw
+    ana_ed.cursor = Some(glam::DVec3::new(120.0, 80.0, 0.0));
+    ana_ed.cursor_in_view = true;
+    ana_ed.selected = Some(crate::doc::Sel::Object((0, 0), 50));
     // Bruno places an object, Ana raises the ground
     {
         let d = bruno_ed.doc.as_mut().unwrap();
@@ -287,6 +292,9 @@ fn two_editors_through_the_session() {
     same(ana_ed.doc.as_ref().unwrap(), bruno_ed.doc.as_ref().unwrap());
     let placed = ana_ed.doc.as_ref().unwrap().tiles[&(1, 0)].tile.objects[0].id;
     assert!(placed >= 100 + ID_BLOCK, "Bruno's object has an IDCode of his block: {placed}");
+    let ana_id = ana.live().unwrap().you.id;
+    let (seen, _) = &bruno.live().unwrap().seen[&ana_id];
+    assert_eq!((seen.cursor, seen.selected.clone()), (Some([120.0, 80.0, 0.0]), vec![(0, 0, 50)]));
     // a guest does not save; leaving lifts the next IDCode past every one in the map
     assert_eq!(ana.live().unwrap().peers.len(), 2);
     bruno.leave(&mut bruno_ed);

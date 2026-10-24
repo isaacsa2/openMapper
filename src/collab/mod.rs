@@ -8,6 +8,7 @@
 //! and the host is the one who saves the map.
 
 pub mod codec;
+pub mod presence;
 pub mod sync;
 #[cfg(test)]
 mod tests;
@@ -76,6 +77,8 @@ pub struct Live {
     /// Where each of the others works, and when it was heard.
     pub seen: HashMap<u32, (Presence, Instant)>,
     pub chat: Vec<(u32, String)>,
+    /// What of this editor's presence was sent last.
+    presence: presence::Sender,
     pub hosting: Option<Hosting>,
     /// The folder of the map the session is about (another map opened ends it).
     dir: PathBuf,
@@ -179,7 +182,7 @@ impl Collab {
         let sync = Sync::new(&w.states, w.ids, true, doc);
         let addrs = if self.lan { omsi_net::addrs::joinable_addresses().iter().map(|a| (format!("{}:{port}", a.ip), a.label())).collect() } else { Vec::new() };
         let hosting = Hosting { _host: host, _gateway: gw, addrs, tunnel };
-        self.phase = Phase::Live(Box::new(Live { client, sync, you: w.you, peers: w.peers, map: w.map, seen: HashMap::new(), chat: Vec::new(), hosting: Some(hosting), dir: doc.dir.clone() }));
+        self.phase = Phase::Live(Box::new(Live { client, sync, you: w.you, peers: w.peers, map: w.map, seen: HashMap::new(), chat: Vec::new(), presence: Default::default(), hosting: Some(hosting), dir: doc.dir.clone() }));
         ed.toast(tr("Hosting this map: others can join it now", "Карта открыта для совместной правки"));
     }
 
@@ -313,6 +316,11 @@ impl Collab {
         if let Some(m) = l.sync.keep_ids(doc) {
             l.client.send(m);
         }
+        if let Some(p) = l.presence.next(Instant::now(), presence::mine(ed)) {
+            l.client.send(Msg::Presence(p));
+        }
+        // (somebody silent this long has stopped sending: not drawn)
+        l.seen.retain(|_, (_, heard)| heard.elapsed() < presence::SEEN_FOR);
         for n in notes {
             let name = |id: u32| l.peers.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_else(|| "?".into());
             match n {
@@ -351,7 +359,7 @@ impl Collab {
         let dir = doc.dir.clone();
         self.joined = Some(doc);
         self.joined_groups = Some(groups);
-        self.phase = Phase::Live(Box::new(Live { client, sync, you: w.you, peers: w.peers, map: w.map, seen: HashMap::new(), chat: Vec::new(), hosting: None, dir }));
+        self.phase = Phase::Live(Box::new(Live { client, sync, you: w.you, peers: w.peers, map: w.map, seen: HashMap::new(), chat: Vec::new(), presence: Default::default(), hosting: None, dir }));
     }
 }
 
