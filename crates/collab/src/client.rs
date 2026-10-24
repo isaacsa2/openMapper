@@ -3,7 +3,7 @@
 
 use std::io::{self, BufReader, BufWriter, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::time::Duration;
 
 use crate::wire::{self, MapInfo, Msg, Peer, Refusal, State, PROTOCOL};
@@ -11,6 +11,8 @@ use crate::auth;
 
 /// The most a host's message may carry (a whole map when joining).
 const MAX_FROM_HOST: u64 = 4 << 30;
+// A paused window or a slow connection must not grow queues without limit.
+const QUEUE: usize = 8;
 const CONNECT: Duration = Duration::from_secs(8);
 /// A host not heard from this long is gone (it pings every few seconds).
 const SILENCE: Duration = Duration::from_secs(45);
@@ -55,7 +57,7 @@ pub enum Event {
 
 /// A connection to a host; dropping it leaves.
 pub struct Client {
-    out: Sender<Msg>,
+    out: SyncSender<Msg>,
     events: Receiver<Event>,
     stream: TcpStream,
 }
@@ -93,8 +95,8 @@ impl Client {
             Msg::Refused(why) => return Err(JoinError::Refused(why)),
             _ => return Err(JoinError::NotAHost),
         };
-        let (out, queue) = mpsc::channel::<Msg>();
-        let (tx, events) = mpsc::channel();
+        let (out, queue) = mpsc::sync_channel::<Msg>(QUEUE);
+        let (tx, events) = mpsc::sync_channel(QUEUE);
         let w = stream.try_clone().map_err(JoinError::Io)?;
         std::thread::Builder::new().name("collab write".into()).spawn(move || write_loop(w, queue)).map_err(JoinError::Io)?;
         std::thread::Builder::new()
@@ -119,7 +121,11 @@ impl Client {
 
     /// Send a message (queued: never waits).
     pub fn send(&self, m: Msg) {
-        let _ = self.out.send(m);
+        if self.out.try_send(m).is_err() {
+            // Never block the editor or silently drop an edit. Closing is reported by the
+            // reader; the editor retains its local document for saving as a copy.
+            let _ = self.stream.shutdown(Shutdown::Both);
+        }
     }
 
     /// What came since the last call.
@@ -147,4 +153,27 @@ fn write_loop(w: TcpStream, queue: Receiver<Msg>) {
         }
     }
     let _ = w.get_ref().shutdown(Shutdown::Both);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_full_send_queue_closes_instead_of_blocking_or_losing_an_edit() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut remote, _) = listener.accept().unwrap();
+        remote.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let (out, queue) = mpsc::sync_channel(QUEUE);
+        let (_tx, events) = mpsc::sync_channel(QUEUE);
+        let client = Client { out, events, stream };
+        for _ in 0..QUEUE {
+            client.send(Msg::NeedIds);
+        }
+        client.send(Msg::NeedIds);
+        assert_eq!(queue.try_iter().count(), QUEUE);
+        let mut byte = [0];
+        assert_eq!(std::io::Read::read(&mut remote, &mut byte).unwrap(), 0);
+    }
 }

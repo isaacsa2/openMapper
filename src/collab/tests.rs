@@ -295,6 +295,35 @@ fn two_editors_through_the_session() {
     let ana_id = ana.live().unwrap().you.id;
     let (seen, _) = &bruno.live().unwrap().seen[&ana_id];
     assert_eq!((seen.cursor, seen.selected.clone()), (Some([120.0, 80.0, 0.0]), vec![(0, 0, 50)]));
+    // A remote update must not replace a tile in the middle of a brush/drag. Once the
+    // gesture ends, the conflict converges and its local version is recoverable.
+    bruno_ed.history.begin("brush still held");
+    bruno_ed.history.touch_tile(bruno_ed.doc.as_ref().unwrap(), (0, 0));
+    bruno_ed.doc.as_mut().unwrap().tiles.get_mut(&(0, 0)).unwrap().terrain.heights[1] = 11.0;
+    ana_ed.history.begin("remote edit");
+    ana_ed.history.touch_tile(ana_ed.doc.as_ref().unwrap(), (0, 0));
+    ana_ed.doc.as_mut().unwrap().tiles.get_mut(&(0, 0)).unwrap().terrain.heights[2] = 22.0;
+    ana_ed.history.commit();
+    for _ in 0..30 {
+        ana.tick(&mut ana_ed, Some(&roots));
+        bruno.tick(&mut bruno_ed, Some(&roots));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(bruno_ed.history.is_open());
+    assert_eq!(bruno_ed.doc.as_ref().unwrap().tiles[&(0, 0)].terrain.heights[1], 11.0);
+    bruno_ed.history.commit();
+    let until = Instant::now() + Duration::from_secs(10);
+    let mut quiet = 0;
+    while quiet < 20 {
+        ana.tick(&mut ana_ed, Some(&roots));
+        bruno.tick(&mut bruno_ed, Some(&roots));
+        quiet = if ana.settled() && bruno.settled() { quiet + 1 } else { 0 };
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    same(ana_ed.doc.as_ref().unwrap(), bruno_ed.doc.as_ref().unwrap());
+    let conflicts = bruno_ed.doc.as_ref().unwrap().dir.join("openMapper/conflicts");
+    assert!(std::fs::read_dir(conflicts).unwrap().next().is_some());
     // a guest does not save; leaving lifts the next IDCode past every one in the map
     assert_eq!(ana.live().unwrap().peers.len(), 2);
     bruno.leave(&mut bruno_ed);

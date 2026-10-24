@@ -38,6 +38,21 @@ pub fn window(ctx: &egui::Context, c: &mut Collab, ed: &mut Editor) {
 }
 
 fn start(ui: &mut egui::Ui, c: &mut Collab, ed: &mut Editor) {
+    if let Some(doc) = ed.doc.as_mut() {
+        if ui.button(tr("Recover a conflicting edit…", "Восстановить конфликтующую правку…")).clicked() {
+            if let Some(path) = rfd::FileDialog::new().set_directory(doc.dir.join("openMapper").join("conflicts")).add_filter("openMapper recovery", &["json"]).pick_file() {
+                match crate::collab::recovery::restore(&path, doc, &mut ed.history) {
+                    Ok(()) => {
+                        ed.selected = None;
+                        ed.also.clear();
+                        ed.hover = None;
+                        ed.toast(tr("Recovered your edit; undo is available", "Правка восстановлена; её можно отменить"));
+                    }
+                    Err(e) => ed.error(e.to_string()),
+                }
+            }
+        }
+    }
     ui.label(RichText::new(tr("Edit one map together: one of you hosts it, the others join. Roads, objects, ground and paint are shared as they are made; the timetable, the traffic and the descriptions stay the host's, and the host saves the map. Everybody needs the same objects and splines installed.", "Правка одной карты вместе: один открывает её, остальные подключаются. Дороги, объекты, рельеф и покраска передаются сразу; расписание, трафик и описания остаются у хоста, и сохраняет карту хост. У всех должны быть установлены те же объекты и сплайны.")).small().color(TEXT_DIM));
     ui.add_space(4.0);
     egui::Grid::new("collab who").num_columns(2).show(ui, |ui| {
@@ -79,7 +94,7 @@ fn start(ui: &mut egui::Ui, c: &mut Collab, ed: &mut Editor) {
 }
 
 fn live(ui: &mut egui::Ui, c: &mut Collab, ed: &mut Editor) {
-    let settled = c.settled();
+    let settled = c.settled() && !ed.history.is_open();
     let mut leave = false;
     {
         let Some(l) = c.live() else { return };
