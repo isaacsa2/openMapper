@@ -10,7 +10,7 @@ static LANG: AtomicU8 = AtomicU8::new(0);
 #[repr(u8)]
 pub enum Lang { En = 0, Ru = 1, PtBr = 2, PtPt = 3 }
 
-pub const LANGUAGES: [(Lang, &str); 5] = [
+pub const LANGUAGES: [(Lang, &str); 4] = [
     (Lang::En, "English"), (Lang::PtBr, "Português (Brasil)"),
     (Lang::PtPt, "Português (Portugal)"), (Lang::Ru, "Русский"),
 ];
