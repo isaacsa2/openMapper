@@ -1,7 +1,7 @@
 //! Undo and redo: every edit keeps the tiles it changed (and the global settings, the
 //! timetable) as they were before it, and stepping back swaps them in again.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use omsi_map::GlobalCfg;
 
@@ -35,6 +35,37 @@ pub struct Snapshot {
 /// a value).
 const MERGE: std::time::Duration = std::time::Duration::from_millis(1500);
 
+/// The parts of the map the kept edits, undos and redos changed (multiplayer passes them on).
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct Changed {
+    pub tiles: BTreeSet<TileKey>,
+    pub global: bool,
+    pub timetable: bool,
+    pub traffic: bool,
+    pub descriptions: bool,
+    pub groups: bool,
+}
+
+impl Changed {
+    pub fn is_empty(&self) -> bool {
+        *self == Changed::default()
+    }
+
+    fn add(&mut self, s: &Step) {
+        self.tiles.extend(s.tiles.keys().copied());
+        self.global |= s.global.is_some();
+        self.timetable |= s.timetable.is_some();
+        self.traffic |= s.traffic.is_some();
+        self.descriptions |= s.descriptions.is_some();
+        self.groups |= s.groups.is_some();
+    }
+
+    /// Whether the step changed any of these.
+    fn meets(&self, s: &Step) -> bool {
+        s.tiles.keys().any(|k| self.tiles.contains(k)) || (self.global && s.global.is_some()) || (self.timetable && s.timetable.is_some()) || (self.traffic && s.traffic.is_some()) || (self.descriptions && s.descriptions.is_some()) || (self.groups && s.groups.is_some())
+    }
+}
+
 #[derive(Default)]
 pub struct History {
     undo: Vec<Step>,
@@ -42,6 +73,8 @@ pub struct History {
     open: Option<Step>,
     /// How many steps were ever kept (for `mark` / `merge_since`).
     kept: u64,
+    /// What changed since `take_changed`.
+    changed: Changed,
 }
 
 const LIMIT: usize = 100;
@@ -84,6 +117,7 @@ impl History {
             if s.tiles.is_empty() && s.global.is_none() && s.timetable.is_none() && s.traffic.is_none() && s.descriptions.is_none() && s.groups.is_none() {
                 return;
             }
+            self.changed.add(&s);
             self.undo.push(s);
             self.kept += 1;
             if self.undo.len() > LIMIT {
@@ -129,6 +163,11 @@ impl History {
     /// the last one when that was of the same kind a moment ago.
     pub fn push_snapshot(&mut self, label: &str, before: Snapshot) {
         self.commit();
+        self.changed.global |= before.global.is_some();
+        self.changed.timetable |= before.timetable.is_some();
+        self.changed.traffic |= before.traffic.is_some();
+        self.changed.descriptions |= before.descriptions.is_some();
+        self.changed.groups |= before.groups.is_some();
         if let Some(last) = self.undo.last_mut() {
             let same = last.label == label && last.tiles.is_empty() && last.global.is_some() == before.global.is_some() && last.timetable.is_some() == before.timetable.is_some() && last.traffic.is_some() == before.traffic.is_some() && last.descriptions.is_some() == before.descriptions.is_some() && last.groups.is_some() == before.groups.is_some();
             if same && self.redo.is_empty() && last.at.elapsed() < MERGE {
@@ -172,6 +211,7 @@ impl History {
     pub fn undo(&mut self, doc: &mut Document) {
         self.commit();
         if let Some(s) = self.undo.pop() {
+            self.changed.add(&s);
             let back = apply(doc, s);
             self.redo.push(back);
         }
@@ -180,6 +220,7 @@ impl History {
     pub fn redo(&mut self, doc: &mut Document) {
         self.commit();
         if let Some(s) = self.redo.pop() {
+            self.changed.add(&s);
             let back = apply(doc, s);
             self.undo.push(back);
         }
@@ -194,6 +235,25 @@ impl History {
         self.undo.clear();
         self.redo.clear();
         self.open = None;
+        self.changed = Changed::default();
+    }
+
+    /// What the kept edits, undos and redos changed since the last call.
+    pub fn take_changed(&mut self) -> Changed {
+        std::mem::take(&mut self.changed)
+    }
+
+    /// Forget every step that changed any of these (somebody else changed them: undoing such a
+    /// step would put back what was there before their edit). The edit still open goes too.
+    pub fn forget(&mut self, parts: &Changed) {
+        if parts.is_empty() {
+            return;
+        }
+        if self.open.as_ref().map(|s| parts.meets(s)).unwrap_or(false) {
+            self.open = None;
+        }
+        self.undo.retain(|s| !parts.meets(s));
+        self.redo.retain(|s| !parts.meets(s));
     }
 }
 
@@ -261,6 +321,43 @@ mod tests {
         assert!(doc.new_id() > first);
         h.redo(&mut doc);
         assert!(doc.new_id() > first + 1);
+    }
+
+    #[test]
+    fn what_changed_is_told_once() {
+        let mut doc = crate::selection::tests::flat_map(2);
+        let mut h = History::default();
+        h.begin("e");
+        h.touch_tile(&doc, (1, 0));
+        doc.tiles.get_mut(&(1, 0)).unwrap().terrain.heights[0] = 5.0;
+        // (an edit still open is not told)
+        assert!(h.take_changed().is_empty());
+        h.commit();
+        let c = h.take_changed();
+        assert_eq!(c.tiles.iter().copied().collect::<Vec<_>>(), vec![(1, 0)]);
+        assert!(!c.global && h.take_changed().is_empty());
+        h.undo(&mut doc);
+        assert_eq!(h.take_changed().tiles.len(), 1);
+        h.push_snapshot("g", Snapshot { groups: Some(Vec::new()), ..Default::default() });
+        assert!(h.take_changed().groups);
+    }
+
+    #[test]
+    fn steps_on_tiles_somebody_else_changed_are_forgotten() {
+        let mut doc = crate::selection::tests::flat_map(2);
+        let mut h = History::default();
+        for k in [(0, 0), (1, 0), (0, 0)] {
+            h.begin("e");
+            h.touch_tile(&doc, k);
+            doc.tiles.get_mut(&k).unwrap().terrain.heights[0] += 1.0;
+            h.commit();
+        }
+        h.forget(&Changed { tiles: [(0, 0)].into(), ..Default::default() });
+        // (the edit of tile 1, 0 alone stays)
+        assert_eq!(h.steps().0.len(), 1);
+        h.undo(&mut doc);
+        assert_eq!(doc.tiles[&(1, 0)].terrain.heights[0], 0.0);
+        assert_eq!(doc.tiles[&(0, 0)].terrain.heights[0], 2.0);
     }
 
     #[test]

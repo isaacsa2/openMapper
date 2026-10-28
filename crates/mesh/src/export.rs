@@ -2000,7 +2000,7 @@ mod tests {
         let (_, path, written) = run(Format::ThreeMf);
         assert_eq!(names(&written), ["scene.3mf"]);
         let mut zip = zip::ZipArchive::new(fs::File::open(&path).unwrap()).unwrap();
-        let mut entries: Vec<String> = zip.file_names().map(String::from).collect();
+        let mut entries: Vec<String> = zip.file_names().map(|name| name.unwrap().into_owned()).collect();
         entries.sort();
         assert_eq!(entries, ["3D/3dmodel.model", "3D/Textures/bus.png", "3D/_rels/3dmodel.model.rels", "[Content_Types].xml", "_rels/.rels"]);
         let mut model = String::new();

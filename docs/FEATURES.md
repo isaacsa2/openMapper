@@ -317,6 +317,31 @@ The complete list. A short overview is in the [README](../README.md).
 * **PBR** in the viewport: normal, roughness, metalness and AO maps are found by
   openOMSI's rules (`omsi-texture`) and drawn with the same derivative-based tangent frame.
 * Undo / redo for every action (Edit > Edit history… lists the steps: a click goes back or forward to one), two languages (English / Russian), interface size 80–150 % (View menu).
+* **Multiplayer** (File > Multiplayer…): one map edited by several people at once. One of them
+  hosts the map open in their openMapper, the others join with an address: on the same network
+  (`192.168.0.10:27560`, port 27560 by default) or from anywhere through a free Cloudflare quick
+  tunnel (`https://….trycloudflare.com`, openOMSI's own: nothing to set up on the router;
+  `cloudflared` is fetched and checked the first time). A password is needed (hosting
+  without one only on the local network, chosen and confirmed) and proved without being sent;
+  over the internet it must have 8 letters or more. What to know before hosting, and a host's
+  limits: [COLLABORATION.md](COLLABORATION.md).
+  * Shared as they are made: every tile (objects, roads and splines, ground, paint, water),
+    the global settings and the tile list, and the groups. Each edit goes to the host with the
+    versions of the tiles it changed; when somebody else changed one of them first, the edit
+    is put back and its author told, so nobody's work is written over unseen.
+  * Undo stays each person's own and leaves the others' edits alone: the steps on a tile
+    somebody else changed since are forgotten.
+  * Every editor hands out IDCodes of its own block, so two people placing things at once
+    never make two with the same number.
+  * The window shows who is in (each in their colour), the addresses to give out, whether
+    one's edits have reached the others, and a chat.
+  * The others' cursors are drawn in the view with their names and the tool in their hand,
+    and what they have selected is ringed (objects) or traced (roads) in their colour.
+  * Not shared yet: the timetable, the traffic and AI and the descriptions stay the host's (a
+    guest's change of them is put back). The host saves the map; a guest's copy goes into
+    `maps/<folder>_multiplayer`, saved once they leave. Everybody needs the same objects and
+    splines installed. On the LAN the connection is not encrypted (the tunnel is), and
+    everybody who joins can change the whole map.
 
 ## Controls
 
